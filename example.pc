@@ -1,0 +1,107 @@
+#import std.io;
+#import std.sync;
+#import std.thread;
+#import std.mem;
+#import "./file.pc";
+#import "./file.ph"; // header, basically same as .pc but just for referencing and integrating with foreign langauges
+#link "./file.o"; // "" denotes a path instead of a module
+
+// --- C-style Structs (Stack-allocated) ---
+struct Point {
+    int x;
+    int y;
+};
+
+// --- Base Class (Static Inheritance) ---
+class HardwareDevice {
+    string deviceId;
+
+    void new(string id) {
+        self.deviceId = id;
+    }
+    // No manual free() needed; system manages scope-based lifetime
+}
+
+// --- Derived Class ---
+class Counter extends HardwareDevice {
+    int value;
+
+    void new(string id, int startValue) {
+        super.new(id);
+        self.value = startValue;
+    }
+}
+
+// --- Ownership-based Struct ---
+struct DeviceData {
+    string deviceId;
+    int value;
+};
+
+// --- Explicit Borrowing Logic ---
+// Compiler ensures device and serviceLock are valid for the scope of the using block
+void logDeviceStatus(borrow DeviceData device, lock serviceLock) {
+    using(serviceLock) { //handles RAII
+        io.print("Device Status Check: " + device.deviceId);
+    }
+}
+
+int main() {
+    io.print("--- Initializing penguinC System ---");
+
+    lock serviceLock = new lock();
+    mut DeviceData myCounter = {"PENGUIN-001", 0};
+
+    // Thread borrows the reference; ownership remains in main()
+    thread.run(logDeviceStatus(myCounter, serviceLock));
+
+    // Increment logic: Compiler validates mutable access
+    myCounter.value += 1;
+
+    // --- Switch/Match logic ---
+    int result = 50; 
+    switch (result) {
+        case 1 { io.print("Success") }
+        case 2 { io.print("2") }
+        case * { io.print("wtf") }
+    }
+    
+    match (result) {
+        case result in 0..50 { io.print("Process completed with minor latency."); }
+        case result > 50 { io.print("Process completed successfully."); }
+        case * { io.print("Unknown error state encountered."); }
+    }
+
+    if result == 1{
+        io.print("penguin")
+    }
+
+    // --- Manual Escape Hatch ---
+    // Only code inside 'unsafe' blocks can perform pointer arithmetic
+    unsafe {
+        int* rawData = mem.alloc(mem.sizeof(int)); 
+        *rawData = 100;
+        free(rawData); // Manual free is required only in 'unsafe' blocks
+    }
+
+    // --- Mutable Ownership ---
+    // Basically follow rust mem model, include borrow checker and everything
+    mut DeviceData mutableCounter = {"PENGUIN-002", 0};
+    mutableCounter.value += 1; 
+    
+    // Borrow semantics
+    borrow mutable thing = mutableCounter; 
+    borrow other = thing; // immutable default
+
+    // Python like Loop
+    for i in 0..100 {
+        io.print(f"value is: {i}"); 
+    }
+    
+    // Managed Heap String
+    // Ownership is tracked; system cleans up at end of scope
+    string penguin = new string("penguin"); 
+    mem.drop(penguin); //take ownership and free
+
+    return 0; 
+}
