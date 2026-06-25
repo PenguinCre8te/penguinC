@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "parser.h"
 #include "error.h"
+#include "codegen.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -219,6 +221,64 @@ static void print_ast(AstNode *node, int depth) {
             print_indent(depth);
             printf("PtrType(%s*)\n", node->as.ptr_type.base_type);
             break;
+        case NODE_DO_WHILE:
+            print_indent(depth);
+            printf("DoWhile\n");
+            print_ast(node->as.do_while_stmt.body, depth + 1);
+            print_ast(node->as.do_while_stmt.cond, depth + 1);
+            break;
+        case NODE_C_STYLE_FOR:
+            print_indent(depth);
+            printf("CStyleFor\n");
+            if (node->as.c_style_for.init)
+                print_ast(node->as.c_style_for.init, depth + 1);
+            if (node->as.c_style_for.cond)
+                print_ast(node->as.c_style_for.cond, depth + 1);
+            if (node->as.c_style_for.update)
+                print_ast(node->as.c_style_for.update, depth + 1);
+            print_ast(node->as.c_style_for.body, depth + 1);
+            break;
+        case NODE_BREAK:
+            print_indent(depth);
+            printf("Break\n");
+            break;
+        case NODE_CONTINUE:
+            print_indent(depth);
+            printf("Continue\n");
+            break;
+        case NODE_GOTO:
+            print_indent(depth);
+            printf("Goto(%s)\n", node->as.goto_stmt.label);
+            break;
+        case NODE_TERNARY:
+            print_indent(depth);
+            printf("Ternary\n");
+            print_ast(node->as.ternary.cond, depth + 1);
+            print_ast(node->as.ternary.then_expr, depth + 1);
+            print_ast(node->as.ternary.else_expr, depth + 1);
+            break;
+        case NODE_CAST:
+            print_indent(depth);
+            printf("Cast(%s)\n", node->as.cast_expr.type_name);
+            print_ast(node->as.cast_expr.operand, depth + 1);
+            break;
+        case NODE_ENUM_DECL:
+            print_indent(depth);
+            printf("Enum(%s)\n", node->as.enum_decl.name);
+            for (size_t i = 0; i < node->as.enum_decl.values.count; i++)
+                print_ast(node->as.enum_decl.values.items[i], depth + 1);
+            break;
+        case NODE_UNION_DECL:
+            print_indent(depth);
+            printf("Union(%s)\n", node->as.union_decl.name);
+            for (size_t i = 0; i < node->as.union_decl.fields.count; i++)
+                print_ast(node->as.union_decl.fields.items[i], depth + 1);
+            break;
+        case NODE_TYPEDEF_DECL:
+            print_indent(depth);
+            printf("Typedef(%s -> %s)\n", node->as.typedef_decl.orig_type,
+                   node->as.typedef_decl.new_name);
+            break;
         default:
             print_indent(depth);
             printf("Node(%d)\n", node->type);
@@ -228,13 +288,43 @@ static void print_ast(AstNode *node, int depth) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: penguinc <file.pc>\n");
+        fprintf(stderr, "usage: penguinc [-o output] <file.pc>\n");
         return 1;
     }
 
-    char *src = read_file(argv[1]);
-    AstNode *ast = parse_file(argv[1], src);
-    print_ast(ast, 0);
+    const char *input_file = NULL;
+    const char *output_file = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            output_file = argv[++i];
+        } else if (argv[i][0] != '-') {
+            input_file = argv[i];
+        }
+    }
+
+    if (!input_file) {
+        fprintf(stderr, "penguinc: no input file specified\n");
+        return 1;
+    }
+
+    if (!output_file) {
+        /* Derive output name from input: foo.pc -> foo */
+        static char default_out[512];
+        strncpy(default_out, input_file, sizeof(default_out) - 1);
+        default_out[sizeof(default_out) - 1] = '\0';
+        char *dot = strrchr(default_out, '.');
+        if (dot) *dot = '\0';
+        output_file = default_out;
+    }
+
+    char *src = read_file(input_file);
+    error_set_source(input_file, src);
+    AstNode *ast = parse_file(input_file, src);
+
+    fprintf(stderr, "--- Generating code ---\n");
+    codegen(ast, output_file);
+
     free(src);
     return 0;
 }

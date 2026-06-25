@@ -95,6 +95,22 @@ static const Keyword keywords[] = {
     {"in",       TOK_IN},
     {"import",   TOK_IMPORT},
     {"link",     TOK_LINK},
+    {"typedef",  TOK_TYPEDEF},
+    {"enum",     TOK_ENUM},
+    {"union",    TOK_UNION},
+    {"extern",   TOK_EXTERN},
+    {"static",   TOK_STATIC},
+    {"const",    TOK_CONST},
+    {"volatile", TOK_VOLATILE},
+    {"register", TOK_REGISTER},
+    {"inline",   TOK_INLINE},
+    {"auto",     TOK_AUTO},
+    {"goto",     TOK_GOTO},
+    {"break",    TOK_BREAK},
+    {"continue", TOK_CONTINUE},
+    {"default",  TOK_DEFAULT},
+    {"do",       TOK_DO},
+    {"NULL",     TOK_NULL_LIT},
     {NULL, 0},
 };
 
@@ -203,6 +219,21 @@ static Token next_token(Lexer *lex) {
                                            : (SrcLoc){NULL, lex->line, lex->col},
                              ERR_LEXER, "unterminated escape sequence in string literal");
                 }
+                char esc = cur_char(lex);
+                char resolved;
+                switch (esc) {
+                    case 'n':  resolved = '\n'; break;
+                    case 't':  resolved = '\t'; break;
+                    case 'r':  resolved = '\r'; break;
+                    case '\\': resolved = '\\'; break;
+                    case '"':  resolved = '"';  break;
+                    case '0':  resolved = '\0'; break;
+                    default:   resolved = esc;  break;
+                }
+                if (len < sizeof(buf) - 1)
+                    buf[len++] = resolved;
+                advance(lex);
+                continue;
             }
             if (len < sizeof(buf) - 1)
                 buf[len++] = cur_char(lex);
@@ -295,7 +326,8 @@ static Token next_token(Lexer *lex) {
         case ':':  return make_token_with_value(lex, TOK_COLON, ":", 1);
         case ',':  return make_token_with_value(lex, TOK_COMMA, ",", 1);
         case '#':  return make_token_with_value(lex, TOK_HASH, "#", 1);
-        case '~':  return make_token_with_value(lex, TOK_NOT, "~", 1);
+        case '~':  return make_token_with_value(lex, TOK_TILDE, "~", 1);
+        case '?':  return make_token_with_value(lex, TOK_QUESTION, "?", 1);
         default:
             error_at((SrcLoc){lex->filename, start_line, start_col},
                      ERR_LEXER, "unexpected character '%c'", c);
@@ -407,7 +439,7 @@ const char *token_type_name(TokenType type) {
         case TOK_GE:           return "'>='";
         case TOK_AND:          return "'&&'";
         case TOK_OR:           return "'||'";
-        case TOK_NOT:          return "'~'";
+        case TOK_TILDE:         return "'~'";
         case TOK_ASSIGN:       return "'='";
         case TOK_PLUS_ASSIGN:  return "'+='";
         case TOK_MINUS_ASSIGN: return "'-='";
@@ -430,6 +462,23 @@ const char *token_type_name(TokenType type) {
         case TOK_IMPORT:       return "'import'";
         case TOK_LINK:         return "'link'";
         case TOK_FUNC:         return "'func'";
+        case TOK_TYPEDEF:      return "'typedef'";
+        case TOK_ENUM:         return "'enum'";
+        case TOK_UNION:        return "'union'";
+        case TOK_EXTERN:       return "'extern'";
+        case TOK_STATIC:       return "'static'";
+        case TOK_CONST:        return "'const'";
+        case TOK_VOLATILE:     return "'volatile'";
+        case TOK_REGISTER:     return "'register'";
+        case TOK_INLINE:       return "'inline'";
+        case TOK_AUTO:         return "'auto'";
+        case TOK_GOTO:         return "'goto'";
+        case TOK_BREAK:        return "'break'";
+        case TOK_CONTINUE:     return "'continue'";
+        case TOK_DEFAULT:      return "'default'";
+        case TOK_DO:           return "'do'";
+        case TOK_NULL_LIT:     return "'NULL'";
+        case TOK_QUESTION:     return "'?'";
         case TOK_EOF:          return "end of file";
         case TOK_ERROR:        return "error";
     }

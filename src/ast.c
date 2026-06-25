@@ -320,3 +320,69 @@ AstNode *ast_new_lock_expr(SrcLoc loc, AstNode *expr) {
     n->as.lock_expr.expr = expr;
     return n;
 }
+
+AstNode *ast_new_do_while(SrcLoc loc, AstNode *cond, AstNode *body) {
+    AstNode *n = ast_new(NODE_DO_WHILE, loc);
+    n->as.do_while_stmt.cond = cond;
+    n->as.do_while_stmt.body = body;
+    return n;
+}
+
+AstNode *ast_new_c_style_for(SrcLoc loc, AstNode *init, AstNode *cond, AstNode *update, AstNode *body) {
+    AstNode *n = ast_new(NODE_C_STYLE_FOR, loc);
+    n->as.c_style_for.init   = init;
+    n->as.c_style_for.cond   = cond;
+    n->as.c_style_for.update = update;
+    n->as.c_style_for.body   = body;
+    return n;
+}
+
+AstNode *ast_new_break(SrcLoc loc) {
+    return ast_new(NODE_BREAK, loc);
+}
+
+AstNode *ast_new_continue(SrcLoc loc) {
+    return ast_new(NODE_CONTINUE, loc);
+}
+
+AstNode *ast_new_goto(SrcLoc loc, const char *label) {
+    AstNode *n = ast_new(NODE_GOTO, loc);
+    n->as.goto_stmt.label = dup_str(label);
+    return n;
+}
+
+AstNode *ast_new_ternary(SrcLoc loc, AstNode *cond, AstNode *then_expr, AstNode *else_expr) {
+    AstNode *n = ast_new(NODE_TERNARY, loc);
+    n->as.ternary.cond      = cond;
+    n->as.ternary.then_expr = then_expr;
+    n->as.ternary.else_expr = else_expr;
+    return n;
+}
+
+AstNode *ast_new_cast(SrcLoc loc, const char *type_name, AstNode *operand) {
+    AstNode *n = ast_new(NODE_CAST, loc);
+    n->as.cast_expr.type_name = dup_str(type_name);
+    n->as.cast_expr.operand   = operand;
+    return n;
+}
+
+AstNode *ast_new_enum_decl(SrcLoc loc, const char *name) {
+    AstNode *n = ast_new(NODE_ENUM_DECL, loc);
+    n->as.enum_decl.name = dup_str(name);
+    nodelist_init(&n->as.enum_decl.values);
+    return n;
+}
+
+AstNode *ast_new_union_decl(SrcLoc loc, const char *name) {
+    AstNode *n = ast_new(NODE_UNION_DECL, loc);
+    n->as.union_decl.name = dup_str(name);
+    nodelist_init(&n->as.union_decl.fields);
+    return n;
+}
+
+AstNode *ast_new_typedef_decl(SrcLoc loc, const char *orig_type, const char *new_name) {
+    AstNode *n = ast_new(NODE_TYPEDEF_DECL, loc);
+    n->as.typedef_decl.orig_type = dup_str(orig_type);
+    n->as.typedef_decl.new_name  = dup_str(new_name);
+    return n;
+}

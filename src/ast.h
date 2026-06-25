@@ -25,7 +25,7 @@ typedef enum {
     /* Operators */
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH, TOK_PERCENT,
     TOK_EQ, TOK_NEQ, TOK_LT, TOK_GT, TOK_LE, TOK_GE,
-    TOK_AND, TOK_OR, TOK_NOT,
+    TOK_AND, TOK_OR, TOK_TILDE,
     TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
     TOK_STAR_ASSIGN, TOK_SLASH_ASSIGN,
     TOK_DOT, TOK_COMMA, TOK_SEMICOLON, TOK_COLON,
@@ -34,6 +34,24 @@ typedef enum {
     TOK_ARROW, TOK_DOTDOT,       /* -> and .. */
     TOK_HASH, TOK_SEMICOLON_DEF,
     TOK_IMPORT, TOK_LINK, TOK_FUNC,
+
+    TOK_TYPEDEF,
+    TOK_ENUM,
+    TOK_UNION,
+    TOK_EXTERN,
+    TOK_STATIC,
+    TOK_CONST,
+    TOK_VOLATILE,
+    TOK_REGISTER,
+    TOK_INLINE,
+    TOK_AUTO,
+    TOK_GOTO,
+    TOK_BREAK,
+    TOK_CONTINUE,
+    TOK_DEFAULT,
+    TOK_DO,
+    TOK_NULL_LIT,
+    TOK_QUESTION,
 
     /* Special */
     TOK_EOF,
@@ -95,6 +113,16 @@ typedef enum {
     NODEPointerType,   /* type* in declarations */
     NODE_BORROW_EXPR,
     NODE_LOCK_EXPR,
+    NODE_DO_WHILE,
+    NODE_C_STYLE_FOR,
+    NODE_BREAK,
+    NODE_CONTINUE,
+    NODE_GOTO,
+    NODE_TERNARY,
+    NODE_CAST,
+    NODE_ENUM_DECL,
+    NODE_UNION_DECL,
+    NODE_TYPEDEF_DECL,
 } NodeType;
 
 /* ------------------------------------------------------------------ */
@@ -245,6 +273,36 @@ struct AstNode {
 
         /* NODE_LOCK_EXPR */
         struct { AstNode *expr; } lock_expr;
+
+        /* NODE_DO_WHILE */
+        struct { AstNode *cond; AstNode *body; } do_while_stmt;
+
+        /* NODE_C_STYLE_FOR */
+        struct { AstNode *init; AstNode *cond; AstNode *update; AstNode *body; } c_style_for;
+
+        /* NODE_BREAK */
+        struct { /* empty */ } break_stmt;
+
+        /* NODE_CONTINUE */
+        struct { /* empty */ } continue_stmt;
+
+        /* NODE_GOTO */
+        struct { char *label; } goto_stmt;
+
+        /* NODE_TERNARY */
+        struct { AstNode *cond; AstNode *then_expr; AstNode *else_expr; } ternary;
+
+        /* NODE_CAST */
+        struct { char *type_name; AstNode *operand; } cast_expr;
+
+        /* NODE_ENUM_DECL */
+        struct { char *name; NodeList values; } enum_decl;
+
+        /* NODE_UNION_DECL */
+        struct { char *name; NodeList fields; } union_decl;
+
+        /* NODE_TYPEDEF_DECL */
+        struct { char *orig_type; char *new_name; } typedef_decl;
     } as;
 };
 
@@ -293,5 +351,15 @@ AstNode *ast_new_free_expr(SrcLoc loc, AstNode *expr);
 AstNode *ast_new_ptr_type(SrcLoc loc, const char *base_type);
 AstNode *ast_new_borrow_expr(SrcLoc loc, AstNode *expr, int is_mut);
 AstNode *ast_new_lock_expr(SrcLoc loc, AstNode *expr);
+AstNode *ast_new_do_while(SrcLoc loc, AstNode *cond, AstNode *body);
+AstNode *ast_new_c_style_for(SrcLoc loc, AstNode *init, AstNode *cond, AstNode *update, AstNode *body);
+AstNode *ast_new_break(SrcLoc loc);
+AstNode *ast_new_continue(SrcLoc loc);
+AstNode *ast_new_goto(SrcLoc loc, const char *label);
+AstNode *ast_new_ternary(SrcLoc loc, AstNode *cond, AstNode *then_expr, AstNode *else_expr);
+AstNode *ast_new_cast(SrcLoc loc, const char *type_name, AstNode *operand);
+AstNode *ast_new_enum_decl(SrcLoc loc, const char *name);
+AstNode *ast_new_union_decl(SrcLoc loc, const char *name);
+AstNode *ast_new_typedef_decl(SrcLoc loc, const char *orig_type, const char *new_name);
 
 #endif /* PENGUINC_AST_H */

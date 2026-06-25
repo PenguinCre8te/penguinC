@@ -12,6 +12,9 @@ typedef enum {
     ERR_SEMANTIC,
 } ErrorKind;
 
+/* Store source context for error display */
+void error_set_source(const char *filename, const char *src);
+
 /* Print a formatted error message with source location and exit */
 void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...);
 

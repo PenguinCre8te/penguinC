@@ -1,5 +1,13 @@
 #include "error.h"
 #include <stdlib.h>
+#include <string.h>
+
+static const char *g_source = NULL;
+
+void error_set_source(const char *filename, const char *src) {
+    (void)filename;
+    g_source = src;
+}
 
 static const char *kind_str(ErrorKind kind) {
     switch (kind) {
@@ -8,6 +16,20 @@ static const char *kind_str(ErrorKind kind) {
         case ERR_SEMANTIC: return "semantic error";
     }
     return "error";
+}
+
+/* Find the start and end of line `line_num` (1-based) in src */
+static void find_line(const char *src, int line_num,
+                      const char **start, const char **end) {
+    const char *p = src;
+    int line = 1;
+    while (*p && line < line_num) {
+        if (*p == '\n') line++;
+        p++;
+    }
+    *start = p;
+    while (*p && *p != '\n') p++;
+    *end = p;
 }
 
 void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...) {
@@ -26,6 +48,25 @@ void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...) {
     va_end(args);
 
     fprintf(stderr, "\n");
+
+    /* Show the source line if available */
+    if (g_source && loc.line > 0) {
+        const char *line_start, *line_end;
+        find_line(g_source, loc.line, &line_start, &line_end);
+
+        /* Print the line content */
+        fprintf(stderr, "  %d | ", loc.line);
+        fwrite(line_start, 1, line_end - line_start, stderr);
+        fprintf(stderr, "\n");
+
+        /* Print caret pointer */
+        fprintf(stderr, "  %*s | ", loc.line >= 10 ? 2 : 1, "");
+        for (int i = 1; i < loc.col; i++) {
+            fputc(' ', stderr);
+        }
+        fprintf(stderr, "\033[1;31m^\033[0m\n");
+    }
+
     exit(1);
 }
 
