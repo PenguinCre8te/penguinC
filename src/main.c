@@ -24,7 +24,7 @@ static void print_indent(int depth) {
     for (int i = 0; i < depth; i++) printf("  ");
 }
 
-static void print_ast(AstNode *node, int depth) {
+__attribute__((unused)) static void print_ast(AstNode *node, int depth) {
     if (!node) return;
     switch (node->type) {
         case NODE_PROGRAM:
@@ -322,7 +322,6 @@ int main(int argc, char **argv) {
     error_set_source(input_file, src);
     AstNode *ast = parse_file(input_file, src);
 
-    fprintf(stderr, "--- Generating code ---\n");
     codegen(ast, output_file);
 
     free(src);

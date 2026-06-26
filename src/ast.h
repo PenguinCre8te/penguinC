@@ -118,6 +118,7 @@ typedef enum {
     NODE_BREAK,
     NODE_CONTINUE,
     NODE_GOTO,
+    NODE_LABEL,
     NODE_TERNARY,
     NODE_CAST,
     NODE_ENUM_DECL,
@@ -166,7 +167,7 @@ struct AstNode {
         struct { char *name; char *parent; NodeList fields; NodeList methods; } class_decl;
 
         /* NODE_FUNC_DECL */
-        struct { char *ret_type; char *name; NodeList params; AstNode *body; int is_method; } func_decl;
+        struct { char *ret_type; char *name; char *class_name; NodeList params; AstNode *body; int is_method; } func_decl;
 
         /* NODE_PARAM */
         struct { char *type; char *name; int is_borrow; int is_lock; } param;
@@ -289,6 +290,9 @@ struct AstNode {
         /* NODE_GOTO */
         struct { char *label; } goto_stmt;
 
+        /* NODE_LABEL */
+        struct { char *name; } label_stmt;
+
         /* NODE_TERNARY */
         struct { AstNode *cond; AstNode *then_expr; AstNode *else_expr; } ternary;
 
@@ -356,6 +360,7 @@ AstNode *ast_new_c_style_for(SrcLoc loc, AstNode *init, AstNode *cond, AstNode *
 AstNode *ast_new_break(SrcLoc loc);
 AstNode *ast_new_continue(SrcLoc loc);
 AstNode *ast_new_goto(SrcLoc loc, const char *label);
+AstNode *ast_new_label(SrcLoc loc, const char *name);
 AstNode *ast_new_ternary(SrcLoc loc, AstNode *cond, AstNode *then_expr, AstNode *else_expr);
 AstNode *ast_new_cast(SrcLoc loc, const char *type_name, AstNode *operand);
 AstNode *ast_new_enum_decl(SrcLoc loc, const char *name);

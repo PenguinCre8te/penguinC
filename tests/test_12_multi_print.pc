@@ -1,0 +1,7 @@
+#import std.io;
+int main() {
+    io.print("one ");
+    io.print("two ");
+    io.print("three\n");
+    return 0;
+}

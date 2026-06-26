@@ -1,0 +1,10 @@
+#import std.io;
+int main() {
+    using(1 + 1) {
+        io.println("inside using block");
+    }
+    unsafe {
+        io.println("inside unsafe block");
+    }
+    return 0;
+}

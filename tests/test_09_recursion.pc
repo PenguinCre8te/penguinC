@@ -1,0 +1,15 @@
+#import std.io;
+int factorial(int n) {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+int main() {
+    io.print_int(factorial(5));
+    io.print("\n");
+    io.print_int(factorial(10));
+    io.print("\n");
+    return 0;
+}

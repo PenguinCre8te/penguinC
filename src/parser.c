@@ -113,15 +113,18 @@ static AstNode *parse_type(void) {
     }
     Token t = *cur();
     adv();
-    char *base = t.value;
+    char base[256];
+    snprintf(base, sizeof(base), "%s", t.value);
 
     /* pointer suffix: type* */
-    AstNode *ty = ast_new_ident(loc, base);
     while (match(TOK_STAR)) {
-        ty = ast_new_ptr_type(loc, base);
-        base = ty->as.ptr_type.base_type;
+        size_t len = strlen(base);
+        if (len < sizeof(base) - 1) {
+            base[len] = '*';
+            base[len + 1] = '\0';
+        }
     }
-    return ty;
+    return ast_new_ident(loc, base);
 }
 
 /* ------------------------------------------------------------------ */
@@ -156,6 +159,7 @@ static int looks_like_cast(void) {
     switch (p->type) {
         case TOK_INT: case TOK_VOID: case TOK_STRING:
         case TOK_BOOL: case TOK_FLOAT:
+        case TOK_IDENT:
             return 1;
         default:
             return 0;
@@ -467,6 +471,14 @@ static AstNode *parse_var_decl_or_expr(void) {
 /*  Statement dispatch                                                  */
 /* ------------------------------------------------------------------ */
 static AstNode *parse_statement(void) {
+    /* Check for label: ident followed by ':' */
+    if (cur_is(TOK_IDENT) && peek_is(TOK_COLON)) {
+        SrcLoc loc = cur()->loc;
+        Token name = *cur();
+        adv(); /* consume ident */
+        adv(); /* consume ':' */
+        return ast_new_label(loc, name.value);
+    }
     switch (cur()->type) {
         case TOK_RETURN:   return parse_return();
         case TOK_IF:       return parse_if();
@@ -596,6 +608,7 @@ static AstNode *parse_class_decl(void) {
                 AstNode *body = parse_block();
                 AstNode *method = ast_new_func_decl(method_name.loc,
                     ret_type->as.ident.name, method_name.value, 1);
+                method->as.func_decl.class_name = strdup(name.value);
                 method->as.func_decl.params = params;
                 method->as.func_decl.body   = body;
                 nodelist_push(&c->as.class_decl.methods, method);

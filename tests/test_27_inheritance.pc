@@ -1,0 +1,25 @@
+#import std.io;
+class Base {
+    int id;
+
+    void new(int i) {
+        self.id = i;
+    }
+}
+
+class Derived extends Base {
+    int extra;
+
+    void new(int i, int e) {
+        super.new(i);
+        self.extra = e;
+    }
+}
+
+int main() {
+    Derived d = new Derived(1, 2);
+    io.print_int(d.id);
+    io.print(" ");
+    io.println_int(d.extra);
+    return 0;
+}

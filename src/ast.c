@@ -75,9 +75,10 @@ AstNode *ast_new_class_decl(SrcLoc loc, const char *name, const char *parent) {
 
 AstNode *ast_new_func_decl(SrcLoc loc, const char *ret_type, const char *name, int is_method) {
     AstNode *n = ast_new(NODE_FUNC_DECL, loc);
-    n->as.func_decl.ret_type  = dup_str(ret_type);
-    n->as.func_decl.name      = dup_str(name);
-    n->as.func_decl.is_method = is_method;
+    n->as.func_decl.ret_type   = dup_str(ret_type);
+    n->as.func_decl.name       = dup_str(name);
+    n->as.func_decl.class_name = NULL;
+    n->as.func_decl.is_method  = is_method;
     nodelist_init(&n->as.func_decl.params);
     return n;
 }
@@ -348,6 +349,12 @@ AstNode *ast_new_continue(SrcLoc loc) {
 AstNode *ast_new_goto(SrcLoc loc, const char *label) {
     AstNode *n = ast_new(NODE_GOTO, loc);
     n->as.goto_stmt.label = dup_str(label);
+    return n;
+}
+
+AstNode *ast_new_label(SrcLoc loc, const char *name) {
+    AstNode *n = ast_new(NODE_LABEL, loc);
+    n->as.label_stmt.name = dup_str(name);
     return n;
 }
 

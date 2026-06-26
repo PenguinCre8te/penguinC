@@ -1,0 +1,16 @@
+#import std.io;
+class Counter {
+    int value;
+
+    void new(int start) {
+        self.value = start;
+    }
+}
+
+int main() {
+    Counter c = new Counter(10);
+    io.println_int(c.value);
+    c.value += 5;
+    io.println_int(c.value);
+    return 0;
+}

@@ -1,0 +1,13 @@
+#import std.io;
+int main() {
+    int x = 10;
+    if x > 5 {
+        io.print("greater\n");
+    } else {
+        io.print("lesser\n");
+    }
+    if x == 10 {
+        io.print("equal\n");
+    }
+    return 0;
+}

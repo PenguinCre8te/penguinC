@@ -1,0 +1,17 @@
+#import std.io;
+int main() {
+    int x = 2;
+    switch (x) {
+        case 1 { io.println("one") }
+        case 2 { io.println("two") }
+        case 3 { io.println("three") }
+        case * { io.println("other") }
+    }
+    int y = 99;
+    switch (y) {
+        case 1 { io.println("one") }
+        case 2 { io.println("two") }
+        case * { io.println("default") }
+    }
+    return 0;
+}

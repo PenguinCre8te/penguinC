@@ -1,0 +1,12 @@
+#import std.io;
+int main() {
+    int i = 5;
+    int result = 0;
+    while i > 0 {
+        result += i * 2;
+        i -= 1;
+    }
+    io.print_int(result);
+    io.print("\n");
+    return 0;
+}

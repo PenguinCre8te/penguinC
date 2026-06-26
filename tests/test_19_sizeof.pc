@@ -1,0 +1,6 @@
+#import std.io;
+int main() {
+    io.println_int(sizeof(int));
+    io.println_int(sizeof(long));
+    return 0;
+}

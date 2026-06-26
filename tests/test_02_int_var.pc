@@ -1,0 +1,7 @@
+#import std.io;
+int main() {
+    int x = 42;
+    io.print_int(x);
+    io.print("\n");
+    return 0;
+}

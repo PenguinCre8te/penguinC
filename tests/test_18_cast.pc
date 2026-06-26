@@ -1,0 +1,9 @@
+#import std.io;
+int main() {
+    long x = 42;
+    int y = (int) x;
+    io.println_int(y);
+    long z = (long) 10;
+    io.println_int(z);
+    return 0;
+}

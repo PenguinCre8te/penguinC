@@ -1,0 +1,8 @@
+#import std.io;
+int main() {
+    string name = "world";
+    io.println(f"hello {name}");
+    int x = 42;
+    io.println(f"answer is {x}");
+    return 0;
+}

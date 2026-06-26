@@ -1,0 +1,12 @@
+#import std.io;
+int main() {
+    int i = 0;
+    int sum = 0;
+    while i < 10 {
+        sum += i;
+        i += 1;
+    }
+    io.print_int(sum);
+    io.print("\n");
+    return 0;
+}
