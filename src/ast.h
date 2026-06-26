@@ -32,6 +32,8 @@ typedef enum {
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE,
     TOK_LBRACKET, TOK_RBRACKET,
     TOK_ARROW, TOK_DOTDOT,       /* -> and .. */
+    TOK_FAT_ARROW,               /* => */
+    TOK_PLUS_PLUS, TOK_MINUS_MINUS, /* ++ and -- */
     TOK_HASH, TOK_SEMICOLON_DEF,
     TOK_IMPORT, TOK_LINK, TOK_FUNC,
 
@@ -74,6 +76,7 @@ typedef enum {
     NODE_PROGRAM,
     NODE_IMPORT,
     NODE_LINK,
+    NODE_FUNC_MAP,
     NODE_STRUCT_DECL,
     NODE_CLASS_DECL,
     NODE_FUNC_DECL,
@@ -155,10 +158,13 @@ struct AstNode {
         struct { NodeList imports; NodeList decls; } program;
 
         /* NODE_IMPORT */
-        struct { char *module; int is_header; } import;
+        struct { char *module; int is_header; NodeList func_maps; NodeList links; } import;
 
         /* NODE_LINK */
         struct { char *path; } link;
+
+        /* NODE_FUNC_MAP */
+        struct { char *pc_name; char *c_name; } func_map;
 
         /* NODE_STRUCT_DECL */
         struct { char *name; NodeList fields; } struct_decl;
@@ -317,6 +323,7 @@ AstNode *ast_new(NodeType type, SrcLoc loc);
 AstNode *ast_new_program(SrcLoc loc);
 AstNode *ast_new_import(SrcLoc loc, const char *mod, int is_header);
 AstNode *ast_new_link(SrcLoc loc, const char *path);
+AstNode *ast_new_func_map(SrcLoc loc, const char *pc_name, const char *c_name);
 AstNode *ast_new_struct_decl(SrcLoc loc, const char *name);
 AstNode *ast_new_class_decl(SrcLoc loc, const char *name, const char *parent);
 AstNode *ast_new_func_decl(SrcLoc loc, const char *ret_type, const char *name, int is_method);

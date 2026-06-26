@@ -4,6 +4,7 @@
 #include "error.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -642,6 +643,133 @@ static AstNode *parse_func_decl(int is_method) {
     return fn;
 }
 
+/* ------------------------------------------------------------------ */
+/*  .ph header file parsing                                            */
+/* ------------------------------------------------------------------ */
+
+static char *trim(char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    char *end = s + strlen(s) - 1;
+    while (end > s && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r'))
+        *end-- = '\0';
+    return s;
+}
+
+/* Resolve a dotted module name to a file path.
+ * e.g. "std.io" -> "$STDLIB/io/io.ph" or "stdlib/io/io.ph" */
+static char *resolve_module_path(const char *module) {
+    const char *stdlib = getenv("STDLIB");
+    if (!stdlib) stdlib = "stdlib";
+
+    /* Build path: stdlib/<last_segment>/<last_segment>.ph */
+    const char *last = strrchr(module, '.');
+    last = last ? last + 1 : module;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s/%s.ph", stdlib, last, last);
+
+    /* Check if file exists */
+    FILE *f = fopen(path, "r");
+    if (f) {
+        fclose(f);
+        return strdup(path);
+    }
+
+    /* Fallback: try stdlib/<module_with_slashes>/<last>.ph */
+    char mod_path[256];
+    strncpy(mod_path, module, sizeof(mod_path) - 1);
+    mod_path[sizeof(mod_path) - 1] = '\0';
+    for (char *p = mod_path; *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+    snprintf(path, sizeof(path), "%s/%s/%s.ph", stdlib, mod_path, last);
+
+    f = fopen(path, "r");
+    if (f) {
+        fclose(f);
+        return strdup(path);
+    }
+
+    return NULL;
+}
+
+static AstNode *parse_header_file(const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) return NULL;
+
+    /* Create an import node to hold the parsed info */
+    SrcLoc loc = {filepath, 1, 1};
+    AstNode *import_node = ast_new_import(loc, filepath, 1);
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char *s = trim(line);
+
+        /* Skip empty lines and comments */
+        if (*s == '\0' || *s == '#') {
+            /* Check for #link directive */
+            if (strncmp(s, "#link", 5) == 0) {
+                s += 5;
+                while (*s == ' ' || *s == '\t') s++;
+                if (*s == '"') {
+                    s++;
+                    char *end = strchr(s, '"');
+                    if (end) {
+                        *end = '\0';
+                        nodelist_push(&import_node->as.import.links,
+                            ast_new_link(loc, s));
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* Parse function mapping: ret_type name(args) => c_name; */
+        char *arrow = strstr(s, "=>");
+        if (arrow) {
+            /* Extract pc_name: everything before =>, minus the type */
+            *arrow = '\0';
+            char *decl = trim(s);
+            char *c_name = trim(arrow + 2);
+
+            /* Remove trailing semicolon from c_name */
+            size_t clen = strlen(c_name);
+            if (clen > 0 && c_name[clen - 1] == ';')
+                c_name[clen - 1] = '\0';
+            c_name = trim(c_name);
+
+            /* Extract the function name from the declaration.
+             * Format: "ret_type name(args)" or "ret_type name(args) const"
+             * We need the 'name' part. */
+            char *open_paren = strchr(decl, '(');
+            if (open_paren) {
+                *open_paren = '\0';
+                /* The function name is the last identifier before '(' */
+                char *name_end = open_paren - 1;
+                while (name_end > decl && (*name_end == ' ' || *name_end == '\t'))
+                    name_end--;
+                char *name_start = name_end;
+                while (name_start > decl && *(name_start - 1) != ' ' &&
+                       *(name_start - 1) != '\t')
+                    name_start--;
+
+                char func_name[256];
+                size_t name_len = name_end - name_start + 1;
+                if (name_len < sizeof(func_name)) {
+                    memcpy(func_name, name_start, name_len);
+                    func_name[name_len] = '\0';
+
+                    nodelist_push(&import_node->as.import.func_maps,
+                        ast_new_func_map(loc, func_name, c_name));
+                }
+            }
+        }
+    }
+
+    fclose(f);
+    return import_node;
+}
+
 static AstNode *parse_top_level(void) {
     switch (cur()->type) {
         case TOK_HASH: {
@@ -655,10 +783,30 @@ static AstNode *parse_top_level(void) {
                     adv();
                     mod_name = path.value;
                     size_t len = strlen(mod_name);
-                    if (len >= 3 && strcmp(mod_name + len - 3, ".ph") == 0)
+                    if (len >= 3 && strcmp(mod_name + len - 3, ".ph") == 0) {
                         is_header = 1;
+                        /* Parse the .ph file and return it directly */
+                        match(TOK_SEMICOLON);
+                        AstNode *hdr = parse_header_file(mod_name);
+                        if (hdr) return hdr;
+                        /* Fallback: just return a plain import */
+                        return ast_new_import(cur()->loc, mod_name, 1);
+                    }
                 } else if (cur_is(TOK_IDENT)) {
                     mod_name = parse_dotted_name();
+                    /* For dotted module names, try to resolve to a .ph file */
+                    char *ph_path = resolve_module_path(mod_name);
+                    if (ph_path) {
+                        match(TOK_SEMICOLON);
+                        AstNode *hdr = parse_header_file(ph_path);
+                        free(ph_path);
+                        if (hdr) {
+                            /* Update the module name to the original dotted name */
+                            free(hdr->as.import.module);
+                            hdr->as.import.module = strdup(mod_name);
+                            return hdr;
+                        }
+                    }
                 } else {
                     error_at(cur()->loc, ERR_PARSER,
                              "expected module name or path string after 'import', got '%s'",
@@ -825,6 +973,12 @@ static AstNode *parse_unary(void) {
     if (match(TOK_STAR)) {
         return ast_new_unary(loc, "*", parse_unary(), 1);
     }
+    if (match(TOK_PLUS_PLUS)) {
+        return ast_new_unary(loc, "++", parse_unary(), 1);
+    }
+    if (match(TOK_MINUS_MINUS)) {
+        return ast_new_unary(loc, "--", parse_unary(), 1);
+    }
     return parse_postfix();
 }
 
@@ -845,6 +999,14 @@ static AstNode *parse_postfix(void) {
             Token member = *cur();
             adv();
             expr = ast_new_member(expr->loc, expr, member.value);
+        } else if (cur_is(TOK_PLUS_PLUS)) {
+            SrcLoc loc = cur()->loc;
+            adv();
+            expr = ast_new_unary(loc, "++", expr, 0);
+        } else if (cur_is(TOK_MINUS_MINUS)) {
+            SrcLoc loc = cur()->loc;
+            adv();
+            expr = ast_new_unary(loc, "--", expr, 0);
         } else {
             break;
         }

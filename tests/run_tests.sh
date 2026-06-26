@@ -56,14 +56,16 @@ run_test() {
     local stdlib_objs=""
     if [ -f "$imports_file" ]; then
         while IFS= read -r mod; do
-            local mod_obj="$STDLIB_DIR/$mod.o"
+            # New path: stdlib/io/io.o
+            local mod_obj="$STDLIB_DIR/$mod/$mod.o"
             if [ -f "$mod_obj" ]; then
                 stdlib_objs="$stdlib_objs $mod_obj"
-            fi
-            # Link per-module aliases if available
-            local alias_obj="$STDLIB_DIR/${mod}_aliases.o"
-            if [ -f "$alias_obj" ]; then
-                stdlib_objs="$stdlib_objs $alias_obj"
+            else
+                # Fallback: old path stdlib/io.o
+                mod_obj="$STDLIB_DIR/$mod.o"
+                if [ -f "$mod_obj" ]; then
+                    stdlib_objs="$stdlib_objs $mod_obj"
+                fi
             fi
         done < "$imports_file"
     fi

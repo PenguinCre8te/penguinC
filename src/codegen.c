@@ -43,6 +43,10 @@ typedef struct {
     size_t class_count;
     size_t class_cap;
 
+    struct { char *pc_name; char *c_name; } *func_maps;
+    size_t func_map_count;
+    size_t func_map_cap;
+
     LLVMBasicBlockRef break_target;
     LLVMBasicBlockRef continue_target;
 
@@ -217,6 +221,24 @@ static int struct_field_index(CodegenCtx *cg, const char *struct_name, const cha
     return -1;
 }
 
+static void func_map_push(CodegenCtx *cg, const char *pc_name, const char *c_name) {
+    if (cg->func_map_count >= cg->func_map_cap) {
+        cg->func_map_cap = cg->func_map_cap ? cg->func_map_cap * 2 : 16;
+        cg->func_maps = realloc(cg->func_maps, cg->func_map_cap * sizeof(*cg->func_maps));
+    }
+    cg->func_maps[cg->func_map_count].pc_name = strdup(pc_name);
+    cg->func_maps[cg->func_map_count].c_name  = strdup(c_name);
+    cg->func_map_count++;
+}
+
+static const char *func_map_lookup(CodegenCtx *cg, const char *pc_name) {
+    for (size_t i = cg->func_map_count; i > 0; i--) {
+        if (strcmp(cg->func_maps[i - 1].pc_name, pc_name) == 0)
+            return cg->func_maps[i - 1].c_name;
+    }
+    return NULL;
+}
+
 static LLVMBasicBlockRef label_lookup(CodegenCtx *cg, const char *name) {
     for (size_t i = 0; i < cg->label_count; i++) {
         if (strcmp(cg->labels[i].name, name) == 0)
@@ -357,6 +379,9 @@ static LLVMValueRef codegen_ident(CodegenCtx *cg, AstNode *node) {
     return NULL;
 }
 
+static LLVMValueRef codegen_unary(CodegenCtx *cg, AstNode *node);
+static LLVMValueRef get_lvalue(CodegenCtx *cg, AstNode *node);
+
 static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
     const char *op = node->as.binary.op;
 
@@ -394,7 +419,9 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
         LLVMGetTypeKind(LLVMTypeOf(right)) == LLVMPointerTypeKind) {
         LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
         LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
-        LLVMValueRef fn = get_or_declare_runtime_fn(cg, "str_concat", fn_ty);
+        const char *c_name = func_map_lookup(cg, "io.str_concat");
+        if (!c_name) c_name = "penguin_str_concat";
+        LLVMValueRef fn = get_or_declare_runtime_fn(cg, c_name, fn_ty);
         return LLVMBuildCall2(cg->builder, fn_ty, fn, (LLVMValueRef[]){left, right}, 2, "strcat");
     }
 
@@ -423,9 +450,34 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
 }
 
 static LLVMValueRef codegen_unary(CodegenCtx *cg, AstNode *node) {
+    const char *op = node->as.unary.op;
+    int is_prefix = node->as.unary.is_prefix;
+
+    /* Handle ++ and -- */
+    if (strcmp(op, "++") == 0 || strcmp(op, "--") == 0) {
+        LLVMValueRef ptr = get_lvalue(cg, node->as.unary.operand);
+        if (!ptr) {
+            error_at(node->loc, ERR_SEMANTIC, "invalid operand for '%s'", op);
+            return NULL;
+        }
+        LLVMTypeRef val_ty = LLVMInt64TypeInContext(cg->ctx);
+        if (node->as.unary.operand->type == NODE_IDENTIFIER) {
+            LLVMTypeRef tracked = var_lookup_type(cg, node->as.unary.operand->as.ident.name);
+            if (tracked) val_ty = tracked;
+        }
+        LLVMValueRef old_val = LLVMBuildLoad2(cg->builder, val_ty, ptr, "oldval");
+        LLVMValueRef one = LLVMConstInt(val_ty, 1, 0);
+        LLVMValueRef new_val;
+        if (strcmp(op, "++") == 0)
+            new_val = LLVMBuildAdd(cg->builder, old_val, one, "inc");
+        else
+            new_val = LLVMBuildSub(cg->builder, old_val, one, "dec");
+        LLVMBuildStore(cg->builder, new_val, ptr);
+        return is_prefix ? new_val : old_val;
+    }
+
     LLVMValueRef operand = codegen_expr(cg, node->as.unary.operand);
     if (!operand) return NULL;
-    const char *op = node->as.unary.op;
     if (strcmp(op, "-") == 0)
         return is_float_type(LLVMTypeOf(operand))
             ? LLVMBuildFNeg(cg->builder, operand, "fneg")
@@ -540,21 +592,34 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
             char buf[256];
             snprintf(buf, sizeof(buf), "%s.%s", obj->as.ident.name, member);
 
-            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
-            LLVMTypeRef i64ty = LLVMInt64TypeInContext(cg->ctx);
+            /* Look up the C symbol name from the func_map registry */
+            const char *c_name = func_map_lookup(cg, buf);
 
-            if (strcmp(buf, "io.print") == 0 || strcmp(buf, "io.println") == 0) {
-                callee_fn_type = LLVMFunctionType(i64ty, (LLVMTypeRef[]){i8ptr, i64ty}, 2, 0);
-                callee = get_or_declare_runtime_fn(cg, buf, callee_fn_type);
-            } else if (strcmp(buf, "io.print_int") == 0 || strcmp(buf, "io.println_int") == 0) {
-                callee_fn_type = LLVMFunctionType(i64ty, (LLVMTypeRef[]){i64ty}, 1, 0);
-                callee = get_or_declare_runtime_fn(cg, buf, callee_fn_type);
+            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+
+            if (c_name) {
+                /* Use the mapped C name */
+                callee = LLVMGetNamedFunction(cg->module, c_name);
+                if (callee) {
+                    callee_fn_type = fn_type_lookup(cg, c_name);
+                }
+                if (!callee_fn_type) {
+                    /* Infer type: all-ptr args, ptr return */
+                    size_t ac = node->as.call.args.count;
+                    LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
+                    for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
+                    callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)ac, 0);
+                    if (argt) free(argt);
+                }
+                if (!callee) {
+                    callee = get_or_declare_runtime_fn(cg, c_name, callee_fn_type);
+                }
             } else {
+                /* No mapping found — use the dot-name as-is (for user-defined functions) */
                 callee = LLVMGetNamedFunction(cg->module, buf);
                 if (callee) {
                     callee_fn_type = fn_type_lookup(cg, buf);
                     if (!callee_fn_type) {
-                        /* Fallback: assume all-ptr args, ptr return */
                         size_t ac = node->as.call.args.count;
                         LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
                         for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
@@ -562,7 +627,6 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                         if (argt) free(argt);
                     }
                 } else {
-                    /* Declare with all-ptr args as fallback */
                     size_t ac = node->as.call.args.count;
                     LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
                     for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
@@ -594,36 +658,6 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef *args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
     for (size_t i = 0; i < argc; i++)
         args[i] = codegen_expr(cg, node->as.call.args.items[i]);
-
-    /* Auto-insert string length for io.print / io.println called with one string arg */
-    int is_io_print = 0;
-    if (node->as.call.callee->type == NODE_MEMBER) {
-        AstNode *obj = node->as.call.callee->as.member.object;
-        const char *m = node->as.call.callee->as.member.member;
-        if (obj->type == NODE_IDENTIFIER &&
-            strcmp(obj->as.ident.name, "io") == 0 &&
-            (strcmp(m, "print") == 0 || strcmp(m, "println") == 0) &&
-            argc == 1) {
-            is_io_print = 1;
-        }
-    }
-    if (is_io_print && args) {
-        LLVMValueRef str_arg = args[0];
-        LLVMTypeRef i64ty = LLVMInt64TypeInContext(cg->ctx);
-        LLVMValueRef len;
-        if (node->as.call.args.items[0]->type == NODE_STRING_LIT) {
-            const char *s = node->as.call.args.items[0]->as.string_lit.value;
-            len = LLVMConstInt(i64ty, (unsigned long long)strlen(s), 0);
-        } else {
-            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
-            LLVMTypeRef strty = LLVMFunctionType(i64ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
-            LLVMValueRef sfn = get_or_declare_runtime_fn(cg, "strlen", strty);
-            len = LLVMBuildCall2(cg->builder, strty, sfn, (LLVMValueRef[]){str_arg}, 1, "strlen");
-        }
-        args = realloc(args, 2 * sizeof(LLVMValueRef));
-        args[1] = len;
-        argc = 2;
-    }
 
     LLVMValueRef result = LLVMBuildCall2(cg->builder, callee_fn_type, callee, args,
                                           (unsigned)argc, argc > 0 ? "call" : "");
@@ -1570,6 +1604,25 @@ static void codegen_program(CodegenCtx *cg, AstNode *program) {
                         cg->imports = realloc(cg->imports, cg->import_cap * sizeof(char *));
                     }
                     cg->imports[cg->import_count++] = strdup(last);
+                }
+                /* Register function mappings from .ph header */
+                for (size_t k = 0; k < decl->as.import.func_maps.count; k++) {
+                    AstNode *fm = decl->as.import.func_maps.items[k];
+                    if (fm && fm->type == NODE_FUNC_MAP) {
+                        /* Build the qualified penguinC name: module.func */
+                        char qualified[512];
+                        snprintf(qualified, sizeof(qualified), "%s.%s", last,
+                                 fm->as.func_map.pc_name);
+                        func_map_push(cg, qualified, fm->as.func_map.c_name);
+                    }
+                }
+                /* Write link paths to .imports.links for the test runner */
+                for (size_t k = 0; k < decl->as.import.links.count; k++) {
+                    AstNode *lnk = decl->as.import.links.items[k];
+                    if (lnk && lnk->type == NODE_LINK) {
+                        /* Store link path in imports file */
+                        /* We'll write this in the emit phase */
+                    }
                 }
                 break;
             }

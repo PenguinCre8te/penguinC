@@ -15,13 +15,13 @@ $(BIN): $(OBJ)
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-stdlib: $(STDLIB)/io.o $(STDLIB)/io_aliases.o $(STDLIB)/mem.o $(STDLIB)/mem_aliases.o
+stdlib: $(STDLIB)/io/io.o $(STDLIB)/mem/mem.o
 
-$(STDLIB)/%.o: $(STDLIB)/%.c
+$(STDLIB)/io/io.o: $(STDLIB)/io/io.c
 	$(CC) -Wall -Wextra -std=c11 -g -c -o $@ $<
 
-$(STDLIB)/%.o: $(STDLIB)/%.s
-	$(CC) -c $< -o $@
+$(STDLIB)/mem/mem.o: $(STDLIB)/mem/mem.c
+	$(CC) -Wall -Wextra -std=c11 -g -c -o $@ $<
 
 test: $(BIN) stdlib
 	@./tests/run_tests.sh
@@ -30,6 +30,6 @@ test-%: $(BIN) stdlib
 	@./tests/run_tests.sh $*
 
 clean:
-	rm -f $(OBJ) $(BIN) $(STDLIB)/*.o
+	rm -f $(OBJ) $(BIN) $(STDLIB)/io/*.o $(STDLIB)/mem/*.o
 
 .PHONY: all clean test stdlib

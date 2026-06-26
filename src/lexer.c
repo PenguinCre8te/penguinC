@@ -259,11 +259,13 @@ static Token next_token(Lexer *lex) {
             case '+':
                 advance(lex);
                 if (c2 == '=') { advance(lex); return make_token_with_value(lex, TOK_PLUS_ASSIGN, "+=", 2); }
+                if (c2 == '+') { advance(lex); return make_token_with_value(lex, TOK_PLUS_PLUS, "++", 2); }
                 return make_token_with_value(lex, TOK_PLUS, "+", 1);
             case '-':
                 advance(lex);
                 if (c2 == '=') { advance(lex); return make_token_with_value(lex, TOK_MINUS_ASSIGN, "-=", 2); }
                 if (c2 == '>') { advance(lex); return make_token_with_value(lex, TOK_ARROW, "->", 2); }
+                if (c2 == '-') { advance(lex); return make_token_with_value(lex, TOK_MINUS_MINUS, "--", 2); }
                 return make_token_with_value(lex, TOK_MINUS, "-", 1);
             case '*':
                 advance(lex);
@@ -279,6 +281,7 @@ static Token next_token(Lexer *lex) {
             case '=':
                 advance(lex);
                 if (c2 == '=') { advance(lex); return make_token_with_value(lex, TOK_EQ, "==", 2); }
+                if (c2 == '>') { advance(lex); return make_token_with_value(lex, TOK_FAT_ARROW, "=>", 2); }
                 return make_token_with_value(lex, TOK_ASSIGN, "=", 1);
             case '!':
                 advance(lex);
@@ -442,6 +445,8 @@ const char *token_type_name(TokenType type) {
         case TOK_TILDE:         return "'~'";
         case TOK_ASSIGN:       return "'='";
         case TOK_PLUS_ASSIGN:  return "'+='";
+        case TOK_PLUS_PLUS:    return "'++'";
+        case TOK_MINUS_MINUS:  return "'--'";
         case TOK_MINUS_ASSIGN: return "'-='";
         case TOK_STAR_ASSIGN:  return "'*='";
         case TOK_SLASH_ASSIGN: return "'/='";
@@ -456,6 +461,7 @@ const char *token_type_name(TokenType type) {
         case TOK_LBRACKET:     return "'['";
         case TOK_RBRACKET:     return "']'";
         case TOK_ARROW:        return "'->'";
+        case TOK_FAT_ARROW:    return "'=>'";
         case TOK_DOTDOT:       return "'..'";
         case TOK_HASH:         return "'#'";
         case TOK_SEMICOLON_DEF: return "';'";

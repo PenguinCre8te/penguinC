@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "parser.h"
 #include "error.h"
 #include "codegen.h"
@@ -40,6 +41,11 @@ __attribute__((unused)) static void print_ast(AstNode *node, int depth) {
         case NODE_LINK:
             print_indent(depth);
             printf("Link(\"%s\")\n", node->as.link.path);
+            break;
+        case NODE_FUNC_MAP:
+            print_indent(depth);
+            printf("FuncMap(%s => %s)\n", node->as.func_map.pc_name,
+                   node->as.func_map.c_name);
             break;
         case NODE_STRUCT_DECL:
             print_indent(depth);
@@ -294,10 +300,12 @@ int main(int argc, char **argv) {
 
     const char *input_file = NULL;
     const char *output_file = NULL;
+    int explicit_output = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_file = argv[++i];
+            explicit_output = 1;
         } else if (argv[i][0] != '-') {
             input_file = argv[i];
         }
@@ -323,6 +331,54 @@ int main(int argc, char **argv) {
     AstNode *ast = parse_file(input_file, src);
 
     codegen(ast, output_file);
+
+    /* Auto-link when no explicit -o: read .imports and invoke gcc */
+    if (!explicit_output) {
+        char imports_path[1024];
+        snprintf(imports_path, sizeof(imports_path), "%s.imports", output_file);
+        FILE *f = fopen(imports_path, "r");
+        if (f) {
+            /* Find stdlib directory */
+            const char *stdlib = getenv("STDLIB");
+            if (!stdlib) stdlib = "stdlib";
+
+            /* The object file has .o appended by codegen */
+            char obj_file[512];
+            snprintf(obj_file, sizeof(obj_file), "%s.o", output_file);
+
+            /* Build gcc command */
+            char cmd[4096];
+            snprintf(cmd, sizeof(cmd), "gcc \"%s\"", obj_file);
+
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                /* Trim newline */
+                size_t len = strlen(line);
+                while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+                    line[--len] = '\0';
+                if (len == 0) continue;
+
+                char obj_path[1024];
+                snprintf(obj_path, sizeof(obj_path), "%s/%s/%s.o", stdlib, line, line);
+                if (access(obj_path, F_OK) == 0) {
+                    char append[1200];
+                    snprintf(append, sizeof(append), " \"%s\"", obj_path);
+                    strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
+                }
+            }
+            fclose(f);
+
+            char append_out[600];
+            snprintf(append_out, sizeof(append_out), " -o \"%s\"", output_file);
+            strncat(cmd, append_out, sizeof(cmd) - strlen(cmd) - 1);
+
+            /* Link */
+            int ret = system(cmd);
+            if (ret != 0) {
+                fprintf(stderr, "penguinc: linking failed (exit code %d)\n", ret);
+            }
+        }
+    }
 
     free(src);
     return 0;

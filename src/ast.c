@@ -48,12 +48,21 @@ AstNode *ast_new_import(SrcLoc loc, const char *mod, int is_header) {
     AstNode *n = ast_new(NODE_IMPORT, loc);
     n->as.import.module    = dup_str(mod);
     n->as.import.is_header = is_header;
+    nodelist_init(&n->as.import.func_maps);
+    nodelist_init(&n->as.import.links);
     return n;
 }
 
 AstNode *ast_new_link(SrcLoc loc, const char *path) {
     AstNode *n = ast_new(NODE_LINK, loc);
     n->as.link.path = dup_str(path);
+    return n;
+}
+
+AstNode *ast_new_func_map(SrcLoc loc, const char *pc_name, const char *c_name) {
+    AstNode *n = ast_new(NODE_FUNC_MAP, loc);
+    n->as.func_map.pc_name = dup_str(pc_name);
+    n->as.func_map.c_name  = dup_str(c_name);
     return n;
 }
 
