@@ -21,4 +21,7 @@ void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...);
 /* Print a formatted error message without location and exit */
 void error_fatal(ErrorKind kind, const char *fmt, ...);
 
+/* Print a formatted warning with source location (does not exit) */
+void warn_at(SrcLoc loc, const char *fmt, ...);
+
 #endif /* PENGUINC_ERROR_H */

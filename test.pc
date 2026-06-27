@@ -4,6 +4,8 @@ int factorial(int x){
     if x == 1 return 1;
     return x * factorial(x-1);
 }
-int main(){
-    io.print_int((string) factorial(5));
+int main()
+{
+    io.print(factorial(5).toS() + "\n");
+    io.print(f"{1.toS()}p")
 }

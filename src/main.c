@@ -292,22 +292,62 @@ __attribute__((unused)) static void print_ast(AstNode *node, int depth) {
     }
 }
 
+#define PENGUINC_VERSION "0.1.0"
+
+static void print_usage(void) {
+    fprintf(stderr,
+        "penguinc " PENGUINC_VERSION " — penguinC compiler\n"
+        "\n"
+        "Usage: penguinc [options] <file.pc>\n"
+        "\n"
+        "Options:\n"
+        "  -o <file>      Set output file (default: derive from input)\n"
+        "  -c             Compile only, do not link\n"
+        "  -O0            No optimizations (default)\n"
+        "  -O1            Basic optimizations\n"
+        "  -O2            Default optimizations\n"
+        "  -O3            Aggressive optimizations\n"
+        "  --version      Print version\n"
+        "  --help         Print this help\n"
+    );
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: penguinc [-o output] <file.pc>\n");
+        print_usage();
         return 1;
     }
 
     const char *input_file = NULL;
     const char *output_file = NULL;
     int explicit_output = 0;
+    OptLevel opt = OPT_NONE;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_file = argv[++i];
             explicit_output = 1;
+        } else if (strcmp(argv[i], "-c") == 0) {
+            explicit_output = 1;
+        } else if (strcmp(argv[i], "-O0") == 0) {
+            opt = OPT_NONE;
+        } else if (strcmp(argv[i], "-O1") == 0) {
+            opt = OPT_BASIC;
+        } else if (strcmp(argv[i], "-O2") == 0) {
+            opt = OPT_DEFAULT;
+        } else if (strcmp(argv[i], "-O3") == 0) {
+            opt = OPT_AGGRESSIVE;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            fprintf(stderr, "penguinc " PENGUINC_VERSION "\n");
+            return 0;
+        } else if (strcmp(argv[i], "--help") == 0) {
+            print_usage();
+            return 0;
         } else if (argv[i][0] != '-') {
             input_file = argv[i];
+        } else {
+            fprintf(stderr, "penguinc: unknown option '%s'\n", argv[i]);
+            return 1;
         }
     }
 
@@ -330,7 +370,7 @@ int main(int argc, char **argv) {
     error_set_source(input_file, src);
     AstNode *ast = parse_file(input_file, src);
 
-    codegen(ast, output_file);
+    codegen(ast, output_file, opt);
 
     /* Auto-link when no explicit -o: read .imports and invoke gcc */
     if (!explicit_output) {

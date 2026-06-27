@@ -78,11 +78,11 @@ int main() {
 
     // --- Manual Escape Hatch ---
     // Only code inside 'unsafe' blocks can perform pointer arithmetic
-    unsafe {
-        int* rawData = mem.alloc(mem.sizeof(int)); 
-        *rawData = 100;
-        free(rawData); // Manual free is required only in 'unsafe' blocks
-    }
+    // unsafe {
+    //     int* rawData = mem.alloc(100); 
+    //     *rawData = 100;
+    //     free(rawData); // Manual free is required only in 'unsafe' blocks
+    // }
 
     // --- Mutable Ownership ---
     // Basically follow rust mem model, include borrow checker and everything

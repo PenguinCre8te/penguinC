@@ -46,7 +46,7 @@ run_test() {
     local imports_file="$obj.imports"
 
     # Compile
-    if ! "$BIN" -o "$obj" "$pc_file" 2>/dev/null; then
+    if ! "$BIN" -c -o "$obj" "$pc_file" 2>/dev/null; then
         echo "  FAIL: $name (compilation failed)"
         FAIL=$((FAIL + 1))
         return
@@ -106,7 +106,7 @@ if [ $# -gt 0 ]; then
     done
 else
     # Run all tests
-    for t in $(seq 1 30); do
+    for t in $(seq 1 31); do
         run_test "$t" 2>/dev/null
     done
 fi

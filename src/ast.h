@@ -164,7 +164,7 @@ struct AstNode {
         struct { char *path; } link;
 
         /* NODE_FUNC_MAP */
-        struct { char *pc_name; char *c_name; } func_map;
+        struct { char *pc_name; char *c_name; char *ret_type; char **param_types; size_t param_count; } func_map;
 
         /* NODE_STRUCT_DECL */
         struct { char *name; NodeList fields; } struct_decl;

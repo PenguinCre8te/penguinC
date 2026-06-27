@@ -5,6 +5,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,7 @@ typedef struct {
     size_t fn_type_count;
     size_t fn_type_cap;
 
-    struct { char *name; LLVMValueRef val; LLVMTypeRef ty; LLVMTypeRef elem_ty; char *struct_name; } *vars;
+    struct { char *name; LLVMValueRef val; LLVMTypeRef ty; LLVMTypeRef elem_ty; char *struct_name; char *type_name; } *vars;
     size_t var_count;
     size_t var_cap;
 
@@ -47,6 +48,10 @@ typedef struct {
     size_t func_map_count;
     size_t func_map_cap;
 
+    struct { char *alias; char *orig; } *typedefs;
+    size_t typedef_count;
+    size_t typedef_cap;
+
     LLVMBasicBlockRef break_target;
     LLVMBasicBlockRef continue_target;
 
@@ -56,6 +61,11 @@ typedef struct {
 
     int loop_depth;
 } CodegenCtx;
+
+static void mangle_name(char *buf, size_t buflen, const char *name,
+                        NodeList *params, size_t param_count);
+static void mangle_call_name(char *buf, size_t buflen, const char *name,
+                             CodegenCtx *cg, NodeList *args, size_t arg_count);
 
 static void class_push(CodegenCtx *cg, const char *name, const char *parent) {
     if (cg->class_count >= cg->class_cap) {
@@ -124,6 +134,7 @@ static void var_push(CodegenCtx *cg, const char *name, LLVMValueRef val, LLVMTyp
     cg->vars[cg->var_count].ty   = ty;
     cg->vars[cg->var_count].elem_ty = NULL;
     cg->vars[cg->var_count].struct_name = NULL;
+    cg->vars[cg->var_count].type_name = NULL;
     cg->var_count++;
 }
 
@@ -159,6 +170,42 @@ static const char *var_lookup_struct_name(CodegenCtx *cg, const char *name) {
             return cg->vars[i - 1].struct_name;
     }
     return NULL;
+}
+
+static void var_set_type_name(CodegenCtx *cg, const char *name, const char *type_name) {
+    for (size_t i = cg->var_count; i > 0; i--) {
+        if (strcmp(cg->vars[i - 1].name, name) == 0) {
+            if (cg->vars[i - 1].type_name) free(cg->vars[i - 1].type_name);
+            cg->vars[i - 1].type_name = strdup(type_name);
+            return;
+        }
+    }
+}
+
+static const char *var_lookup_type_name(CodegenCtx *cg, const char *name) {
+    for (size_t i = cg->var_count; i > 0; i--) {
+        if (strcmp(cg->vars[i - 1].name, name) == 0)
+            return cg->vars[i - 1].type_name;
+    }
+    return NULL;
+}
+
+static void typedef_push(CodegenCtx *cg, const char *alias, const char *orig) {
+    if (cg->typedef_count >= cg->typedef_cap) {
+        cg->typedef_cap = cg->typedef_cap ? cg->typedef_cap * 2 : 16;
+        cg->typedefs = realloc(cg->typedefs, cg->typedef_cap * sizeof(*cg->typedefs));
+    }
+    cg->typedefs[cg->typedef_count].alias = strdup(alias);
+    cg->typedefs[cg->typedef_count].orig = strdup(orig);
+    cg->typedef_count++;
+}
+
+static const char *typedef_resolve(CodegenCtx *cg, const char *name) {
+    for (size_t i = cg->typedef_count; i > 0; i--) {
+        if (strcmp(cg->typedefs[i - 1].alias, name) == 0)
+            return cg->typedefs[i - 1].orig;
+    }
+    return name;
 }
 
 static LLVMValueRef var_lookup(CodegenCtx *cg, const char *name) {
@@ -419,7 +466,9 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
         LLVMGetTypeKind(LLVMTypeOf(right)) == LLVMPointerTypeKind) {
         LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
         LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
-        const char *c_name = func_map_lookup(cg, "io.str_concat");
+        /* Try mangled name first: io._pCstr_concatss */
+        const char *c_name = func_map_lookup(cg, "io._pCstr_concatss");
+        if (!c_name) c_name = func_map_lookup(cg, "io.str_concat");
         if (!c_name) c_name = "penguin_str_concat";
         LLVMValueRef fn = get_or_declare_runtime_fn(cg, c_name, fn_ty);
         return LLVMBuildCall2(cg->builder, fn_ty, fn, (LLVMValueRef[]){left, right}, 2, "strcat");
@@ -582,6 +631,86 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
     if (!node->as.call.callee)
         return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0));
 
+    /* Type methods: x.toI(), x.toF(), x.toS(), x.toB() */
+    if (node->as.call.callee->type == NODE_MEMBER &&
+        node->as.call.args.count == 0) {
+        AstNode *obj = node->as.call.callee->as.member.object;
+        const char *method = node->as.call.callee->as.member.member;
+        if (strcmp(method, "toI") == 0 || strcmp(method, "toF") == 0 ||
+            strcmp(method, "toS") == 0 || strcmp(method, "toB") == 0) {
+            LLVMValueRef val = codegen_expr(cg, obj);
+            if (!val) return NULL;
+
+            /* Determine source type */
+            const char *src_type = NULL;
+            if (obj->type == NODE_IDENTIFIER)
+                src_type = var_lookup_type_name(cg, obj->as.ident.name);
+
+            LLVMTypeRef val_ty = LLVMTypeOf(val);
+            LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+            LLVMTypeRef f64_ty = LLVMDoubleTypeInContext(cg->ctx);
+            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+
+            if (strcmp(method, "toI") == 0) {
+                /* toI: convert to int */
+                if (src_type && strcmp(src_type, "int") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
+                    return LLVMBuildSExtOrBitCast(cg->builder, val, i64_ty, "toi");
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind)
+                    return LLVMBuildFPToSI(cg->builder, val, i64_ty, "toi");
+                /* string → parse_int */
+                LLVMTypeRef fn_ty = LLVMFunctionType(i64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
+                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_int", fn_ty);
+                return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "toi");
+            }
+            if (strcmp(method, "toF") == 0) {
+                /* toF: convert to float */
+                if (src_type && strcmp(src_type, "float") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
+                    return LLVMBuildSIToFP(cg->builder, val, f64_ty, "tof");
+                /* string → parse_float */
+                LLVMTypeRef fn_ty = LLVMFunctionType(f64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
+                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_float", fn_ty);
+                return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tof");
+            }
+            if (strcmp(method, "toS") == 0) {
+                /* toS: convert to string */
+                if (src_type && strcmp(src_type, "string") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMPointerTypeKind) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
+                    if (LLVMGetIntTypeWidth(val_ty) == 1) {
+                        /* bool → bool_to_string */
+                        LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_ty}, 1, 0);
+                        LLVMValueRef fn = get_or_declare_runtime_fn(cg, "bool_to_string", fn_ty);
+                        LLVMValueRef ext = LLVMBuildZExt(cg->builder, val, i64_ty, "bext");
+                        return LLVMBuildCall2(cg->builder, fn_ty, fn, &ext, 1, "tos");
+                    }
+                    LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_ty}, 1, 0);
+                    LLVMValueRef fn = get_or_declare_runtime_fn(cg, "int_to_string", fn_ty);
+                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tos");
+                }
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind) {
+                    LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){f64_ty}, 1, 0);
+                    LLVMValueRef fn = get_or_declare_runtime_fn(cg, "float_to_string", fn_ty);
+                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tos");
+                }
+                return val;
+            }
+            if (strcmp(method, "toB") == 0) {
+                /* toB: convert to bool */
+                if (src_type && strcmp(src_type, "bool") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(val_ty) == 1)
+                    return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
+                    return LLVMBuildICmp(cg->builder, LLVMIntNE, val, LLVMConstInt(val_ty, 0, 0), "tob");
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind)
+                    return LLVMBuildFCmp(cg->builder, LLVMRealUNE, val, LLVMConstReal(f64_ty, 0.0), "tob");
+                return LLVMConstInt(LLVMInt1TypeInContext(cg->ctx), 1, 0);
+            }
+        }
+    }
+
     LLVMValueRef callee = NULL;
     LLVMTypeRef callee_fn_type = NULL;
 
@@ -589,20 +718,31 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         AstNode *obj = node->as.call.callee->as.member.object;
         const char *member = node->as.call.callee->as.member.member;
         if (obj->type == NODE_IDENTIFIER) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "%s.%s", obj->as.ident.name, member);
+            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+
+            /* Build mangled function name for overload resolution */
+            char fn_mangled[256];
+            mangle_call_name(fn_mangled, sizeof(fn_mangled), member, cg,
+                             &node->as.call.args, node->as.call.args.count);
+
+            /* Build qualified mangled name: module._pCfunc<types> */
+            char qualified_mangled[512];
+            snprintf(qualified_mangled, sizeof(qualified_mangled), "%s.%s",
+                     obj->as.ident.name, fn_mangled);
+
+            /* Build simple qualified name: module.func */
+            char qualified[256];
+            snprintf(qualified, sizeof(qualified), "%s.%s",
+                     obj->as.ident.name, member);
 
             /* Look up the C symbol name from the func_map registry */
-            const char *c_name = func_map_lookup(cg, buf);
-
-            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+            const char *c_name = func_map_lookup(cg, qualified_mangled);
+            if (!c_name) c_name = func_map_lookup(cg, qualified);
 
             if (c_name) {
                 /* Use the mapped C name */
                 callee = LLVMGetNamedFunction(cg->module, c_name);
-                if (callee) {
-                    callee_fn_type = fn_type_lookup(cg, c_name);
-                }
+                callee_fn_type = fn_type_lookup(cg, c_name);
                 if (!callee_fn_type) {
                     /* Infer type: all-ptr args, ptr return */
                     size_t ac = node->as.call.args.count;
@@ -615,10 +755,12 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                     callee = get_or_declare_runtime_fn(cg, c_name, callee_fn_type);
                 }
             } else {
-                /* No mapping found — use the dot-name as-is (for user-defined functions) */
-                callee = LLVMGetNamedFunction(cg->module, buf);
+                /* No mapping found — use the mangled qualified name */
+                callee = LLVMGetNamedFunction(cg->module, qualified_mangled);
+                if (!callee) callee = LLVMGetNamedFunction(cg->module, qualified);
                 if (callee) {
-                    callee_fn_type = fn_type_lookup(cg, buf);
+                    callee_fn_type = fn_type_lookup(cg, qualified_mangled);
+                    if (!callee_fn_type) callee_fn_type = fn_type_lookup(cg, qualified);
                     if (!callee_fn_type) {
                         size_t ac = node->as.call.args.count;
                         LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
@@ -631,7 +773,7 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                     LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
                     for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
                     callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)ac, 0);
-                    callee = get_or_declare_runtime_fn(cg, buf, callee_fn_type);
+                    callee = get_or_declare_runtime_fn(cg, qualified_mangled, callee_fn_type);
                     if (argt) free(argt);
                 }
             }
@@ -642,8 +784,32 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         }
     } else if (node->as.call.callee->type == NODE_IDENTIFIER) {
         const char *ident_name = node->as.call.callee->as.ident.name;
-        callee = LLVMGetNamedFunction(cg->module, ident_name);
-        if (callee) callee_fn_type = fn_type_lookup(cg, ident_name);
+        /* Try mangled name first (for overloading support) */
+        char mangled[512];
+        mangle_call_name(mangled, sizeof(mangled), ident_name, cg,
+                         &node->as.call.args, node->as.call.args.count);
+        callee = LLVMGetNamedFunction(cg->module, mangled);
+        if (callee) {
+            callee_fn_type = fn_type_lookup(cg, mangled);
+        } else {
+            /* Fallback: try common type combinations for the given arg count */
+            static const char *type_chars[] = {"i", "f", "s", "b"};
+            size_t argc = node->as.call.args.count;
+            for (size_t try_idx = 0; try_idx < 4 && !callee; try_idx++) {
+                char try_name[512];
+                size_t p = 0;
+                p += snprintf(try_name + p, sizeof(try_name) - p, "_pC%s", ident_name);
+                for (size_t a = 0; a < argc; a++)
+                    p += snprintf(try_name + p, sizeof(try_name) - p, "%s", type_chars[try_idx]);
+                callee = LLVMGetNamedFunction(cg->module, try_name);
+                if (callee) callee_fn_type = fn_type_lookup(cg, try_name);
+            }
+            if (!callee) {
+                /* Final fallback: unmangled name (for external/runtime functions) */
+                callee = LLVMGetNamedFunction(cg->module, ident_name);
+                if (callee) callee_fn_type = fn_type_lookup(cg, ident_name);
+            }
+        }
     } else {
         callee = codegen_expr(cg, node->as.call.callee);
         if (callee) callee_fn_type = fn_type_lookup(cg, "unknown");
@@ -940,6 +1106,7 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
         var_push(cg, var_name, alloca_inst, ptr_ty);
         var_set_elem_type(cg, var_name, ty);
         var_set_struct_name(cg, var_name, type_name);
+        var_set_type_name(cg, var_name, type_name);
         /* Store the init value */
         LLVMValueRef init_val = codegen_expr(cg, node->as.var_decl.init);
         if (init_val) LLVMBuildStore(cg->builder, init_val, alloca_inst);
@@ -948,6 +1115,7 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
 
     LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, ty, var_name);
     var_push(cg, var_name, alloca_inst, ty);
+    var_set_type_name(cg, var_name, type_name);
     if (LLVMGetTypeKind(ty) == LLVMStructTypeKind)
         var_set_struct_name(cg, var_name, type_name);
 
@@ -1383,6 +1551,97 @@ static void codegen_stmt(CodegenCtx *cg, AstNode *node) {
     }
 }
 
+static void mangle_name(char *buf, size_t buflen, const char *name,
+                        NodeList *params, size_t param_count) {
+    /* Type-based mangling: _pC<name><type_chars> */
+    size_t pos = 0;
+    pos += snprintf(buf + pos, buflen - pos, "_pC%s", name);
+    for (size_t i = 0; i < param_count && pos < buflen - 1; i++) {
+        const char *t = params->items[i]->as.param.type;
+        /* If type has *, it's a pointer → mangle as 'p' */
+        if (strchr(t, '*')) {
+            buf[pos++] = 'p';
+        } else if (strcmp(t, "int") == 0)        buf[pos++] = 'i';
+        else if (strcmp(t, "float") == 0) buf[pos++] = 'f';
+        else if (strcmp(t, "bool") == 0)  buf[pos++] = 'b';
+        else if (strcmp(t, "string") == 0) buf[pos++] = 's';
+        else if (strcmp(t, "void") == 0)  buf[pos++] = 'v';
+        else {
+            size_t tlen = strlen(t);
+            buf[pos++] = 'p';
+            if (tlen > 0 && pos < buflen - 1)
+                buf[pos++] = t[0];
+        }
+    }
+    buf[pos] = '\0';
+}
+
+static void mangle_call_name(char *buf, size_t buflen, const char *name,
+                             CodegenCtx *cg, NodeList *args, size_t arg_count) {
+    /* Type-based mangling from call args */
+    size_t pos = 0;
+    pos += snprintf(buf + pos, buflen - pos, "_pC%s", name);
+    for (size_t i = 0; i < arg_count && pos < buflen - 1; i++) {
+        AstNode *a = args->items[i];
+        if (a->type == NODE_INT_LIT)       { buf[pos++] = 'i'; }
+        else if (a->type == NODE_FLOAT_LIT) { buf[pos++] = 'f'; }
+        else if (a->type == NODE_STRING_LIT) { buf[pos++] = 's'; }
+        else if (a->type == NODE_IDENTIFIER) {
+            LLVMTypeRef ty = var_lookup_type(cg, a->as.ident.name);
+            const char *tn = var_lookup_type_name(cg, a->as.ident.name);
+            const char *resolved = tn ? typedef_resolve(cg, tn) : tn;
+            if (resolved && strcmp(resolved, "string") == 0)              buf[pos++] = 's';
+            else if (resolved && (strcmp(resolved, "int") == 0 || strcmp(resolved, "long") == 0))  buf[pos++] = 'i';
+            else if (resolved && strcmp(resolved, "float") == 0)         buf[pos++] = 'f';
+            else if (resolved && strcmp(resolved, "bool") == 0)          buf[pos++] = 'b';
+            else if (tn && strcmp(tn, "string") == 0)                    buf[pos++] = 's';
+            else if (ty == LLVMInt64TypeInContext(cg->ctx))              buf[pos++] = 'i';
+            else if (ty == LLVMDoubleTypeInContext(cg->ctx))             buf[pos++] = 'f';
+            else if (ty == LLVMInt1TypeInContext(cg->ctx))               buf[pos++] = 'b';
+            else                                                         buf[pos++] = 'p';
+        } else if (a->type == NODE_BINARY || a->type == NODE_UNARY) {
+            if (a->type == NODE_BINARY && strcmp(a->as.binary.op, "+") == 0) {
+                /* String concat: + with any string operand → result is string */
+                if (a->as.binary.left->type == NODE_STRING_LIT ||
+                    a->as.binary.right->type == NODE_STRING_LIT) {
+                    buf[pos++] = 's'; continue;
+                }
+                /* Check if left is a string variable */
+                if (a->as.binary.left->type == NODE_IDENTIFIER) {
+                    const char *tn = var_lookup_type_name(cg, a->as.binary.left->as.ident.name);
+                    if (tn && strcmp(tn, "string") == 0) { buf[pos++] = 's'; continue; }
+                }
+                /* Check if left is a call returning string (e.g. .toS()) */
+                if (a->as.binary.left->type == NODE_CALL &&
+                    a->as.binary.left->as.call.callee->type == NODE_MEMBER) {
+                    const char *m = a->as.binary.left->as.call.callee->as.member.member;
+                    if (strcmp(m, "toS") == 0) { buf[pos++] = 's'; continue; }
+                }
+            }
+            /* For other binary/unary ops, infer type from left operand */
+            AstNode *inner = (a->type == NODE_BINARY) ? a->as.binary.left : a->as.unary.operand;
+            if (inner->type == NODE_INT_LIT || inner->type == NODE_IDENTIFIER) {
+                if (inner->type == NODE_IDENTIFIER) {
+                    LLVMTypeRef ty = var_lookup_type(cg, inner->as.ident.name);
+                    if (ty == LLVMDoubleTypeInContext(cg->ctx)) { buf[pos++] = 'f'; continue; }
+                }
+                buf[pos++] = 'i';
+            } else { buf[pos++] = 'i'; }
+        } else if (a->type == NODE_CALL) {
+            /* Check if it's a .toS() call → returns string */
+            if (a->as.call.callee->type == NODE_MEMBER) {
+                const char *m = a->as.call.callee->as.member.member;
+                if (strcmp(m, "toS") == 0) { buf[pos++] = 's'; continue;
+                } else if (strcmp(m, "toI") == 0) { buf[pos++] = 'i'; continue;
+                } else if (strcmp(m, "toF") == 0) { buf[pos++] = 'f'; continue;
+                } else if (strcmp(m, "toB") == 0) { buf[pos++] = 'b'; continue; }
+            }
+            buf[pos++] = 'i';
+        } else { buf[pos++] = 'i'; }
+    }
+    buf[pos] = '\0';
+}
+
 static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     const char *name = node->as.func_decl.name;
     const char *ret_type_name = node->as.func_decl.ret_type;
@@ -1411,8 +1670,12 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
         snprintf(mangled, sizeof(mangled), "%s.%s", node->as.func_decl.class_name, name);
     } else if (is_method) {
         snprintf(mangled, sizeof(mangled), "%s.new", name);
+    } else if (strcmp(name, "main") == 0) {
+        snprintf(mangled, sizeof(mangled), "main");
     } else {
-        snprintf(mangled, sizeof(mangled), "%s", name);
+        /* Mangle with parameter types for overloading support */
+        mangle_name(mangled, sizeof(mangled), name,
+                    &node->as.func_decl.params, user_param_count);
     }
 
     LLVMValueRef fn = LLVMGetNamedFunction(cg->module, mangled);
@@ -1456,6 +1719,14 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
         LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, pty, param_name);
         LLVMBuildStore(cg->builder, param, alloca_inst);
         var_push(cg, param_name, alloca_inst, pty);
+        /* Set type_name for function parameters */
+        if (!node->as.func_decl.is_method || i != 0) {
+            size_t pidx = node->as.func_decl.is_method ? i - 1 : i;
+            if (pidx < node->as.func_decl.params.count) {
+                const char *pty_name = node->as.func_decl.params.items[pidx]->as.param.type;
+                if (pty_name) var_set_type_name(cg, param_name, pty_name);
+            }
+        }
         /* For the self parameter of a class method, set elem_ty for member access */
         if (node->as.func_decl.is_method && i == 0 && node->as.func_decl.class_name) {
             LLVMTypeRef class_ty = struct_lookup(cg, node->as.func_decl.class_name);
@@ -1523,8 +1794,7 @@ static void codegen_enum_decl(CodegenCtx *cg, AstNode *node) {
 }
 
 static void codegen_typedef_decl(CodegenCtx *cg, AstNode *node) {
-    /* Typedefs are just aliases in our type resolver - no LLVM IR needed */
-    (void)cg; (void)node;
+    typedef_push(cg, node->as.typedef_decl.new_name, node->as.typedef_decl.orig_type);
 }
 
 static void codegen_program(CodegenCtx *cg, AstNode *program) {
@@ -1609,11 +1879,23 @@ static void codegen_program(CodegenCtx *cg, AstNode *program) {
                 for (size_t k = 0; k < decl->as.import.func_maps.count; k++) {
                     AstNode *fm = decl->as.import.func_maps.items[k];
                     if (fm && fm->type == NODE_FUNC_MAP) {
-                        /* Build the qualified penguinC name: module.func */
+                        /* Build the qualified penguinC name: module.mangled_name */
                         char qualified[512];
                         snprintf(qualified, sizeof(qualified), "%s.%s", last,
                                  fm->as.func_map.pc_name);
                         func_map_push(cg, qualified, fm->as.func_map.c_name);
+
+                        /* Build and register the LLVM function type from .ph declaration */
+                        if (fm->as.func_map.ret_type) {
+                            LLVMTypeRef ret_ty = resolve_type(cg, fm->as.func_map.ret_type);
+                            size_t pc = fm->as.func_map.param_count;
+                            LLVMTypeRef *arg_tys = pc > 0 ? malloc(pc * sizeof(LLVMTypeRef)) : NULL;
+                            for (size_t pi = 0; pi < pc; pi++)
+                                arg_tys[pi] = resolve_type(cg, fm->as.func_map.param_types[pi]);
+                            LLVMTypeRef fn_ty = LLVMFunctionType(ret_ty, arg_tys, (unsigned)pc, 0);
+                            fn_type_push(cg, fm->as.func_map.c_name, fn_ty);
+                            if (arg_tys) free(arg_tys);
+                        }
                     }
                 }
                 /* Write link paths to .imports.links for the test runner */
@@ -1634,7 +1916,7 @@ static void codegen_program(CodegenCtx *cg, AstNode *program) {
     }
 }
 
-static void emit_object_file(LLVMModuleRef module, const char *output_file) {
+static LLVMTargetMachineRef create_target_machine(LLVMModuleRef module, OptLevel opt) {
     char *triple = LLVMGetDefaultTargetTriple();
     LLVMTargetRef target;
     char *err = NULL;
@@ -1643,16 +1925,30 @@ static void emit_object_file(LLVMModuleRef module, const char *output_file) {
         fprintf(stderr, "penguinc: failed to get target: %s\n", err);
         LLVMDisposeMessage(err);
         LLVMDisposeMessage(triple);
-        return;
+        return NULL;
+    }
+
+    LLVMCodeGenOptLevel codegen_opt;
+    switch (opt) {
+        case OPT_NONE:       codegen_opt = LLVMCodeGenLevelNone; break;
+        case OPT_BASIC:      codegen_opt = LLVMCodeGenLevelLess; break;
+        case OPT_DEFAULT:    codegen_opt = LLVMCodeGenLevelDefault; break;
+        case OPT_AGGRESSIVE: codegen_opt = LLVMCodeGenLevelAggressive; break;
     }
 
     LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
-        target, triple, "generic", "", LLVMCodeGenLevelDefault,
+        target, triple, "generic", "", codegen_opt,
         LLVMRelocDefault, LLVMCodeModelDefault);
 
     LLVMTargetDataRef td = LLVMCreateTargetDataLayout(tm);
     LLVMSetDataLayout(module, LLVMCopyStringRepOfTargetData(td));
     LLVMDisposeTargetData(td);
+
+    free(triple);
+    return tm;
+}
+
+static void emit_object_file(LLVMTargetMachineRef tm, LLVMModuleRef module, const char *output_file) {
 
     char *obj_file = malloc(strlen(output_file) + 5);
     strcpy(obj_file, output_file);
@@ -1672,11 +1968,9 @@ static void emit_object_file(LLVMModuleRef module, const char *output_file) {
     }
 
     free(obj_file);
-    LLVMDisposeMessage(triple);
-    LLVMDisposeTargetMachine(tm);
 }
 
-int codegen(AstNode *program, const char *output_file) {
+int codegen(AstNode *program, const char *output_file, OptLevel opt) {
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
@@ -1712,8 +2006,33 @@ int codegen(AstNode *program, const char *output_file) {
         LLVMDisposeMessage(verify_err);
     }
 
+    /* Create target machine once */
+    LLVMTargetMachineRef tm = create_target_machine(module, opt);
+
+    /* Run optimization passes via new pass manager */
+    if (tm && opt > OPT_NONE) {
+        const char *pipeline;
+        switch (opt) {
+            case OPT_BASIC:      pipeline = "default<O1>"; break;
+            case OPT_DEFAULT:    pipeline = "default<O2>"; break;
+            case OPT_AGGRESSIVE: pipeline = "default<O3>"; break;
+            default:             pipeline = "default<O0>"; break;
+        }
+        LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+        LLVMErrorRef err = LLVMRunPasses(module, pipeline, tm, opts);
+        if (err) {
+            char *msg = LLVMGetErrorMessage(err);
+            fprintf(stderr, "penguinc: optimization failed: %s\n", msg);
+            LLVMDisposeErrorMessage(msg);
+        }
+        LLVMDisposePassBuilderOptions(opts);
+    }
+
     /* Emit object file */
-    emit_object_file(module, output_file);
+    if (tm) {
+        emit_object_file(tm, module, output_file);
+        LLVMDisposeTargetMachine(tm);
+    }
 
     /* Write .imports file for selective linking */
     {

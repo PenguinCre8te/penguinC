@@ -3,8 +3,13 @@
 
 #include "ast.h"
 
-/* Generate LLVM IR and emit an object file for the given AST.
-   Returns 0 on success, 1 on failure. */
-int codegen(AstNode *program, const char *output_file);
+typedef enum {
+    OPT_NONE = 0,
+    OPT_BASIC,
+    OPT_DEFAULT,
+    OPT_AGGRESSIVE
+} OptLevel;
+
+int codegen(AstNode *program, const char *output_file, OptLevel opt);
 
 #endif /* PENGUINC_CODEGEN_H */

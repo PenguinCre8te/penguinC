@@ -63,6 +63,9 @@ AstNode *ast_new_func_map(SrcLoc loc, const char *pc_name, const char *c_name) {
     AstNode *n = ast_new(NODE_FUNC_MAP, loc);
     n->as.func_map.pc_name = dup_str(pc_name);
     n->as.func_map.c_name  = dup_str(c_name);
+    n->as.func_map.ret_type = NULL;
+    n->as.func_map.param_types = NULL;
+    n->as.func_map.param_count = 0;
     return n;
 }
 

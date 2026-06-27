@@ -81,3 +81,37 @@ void error_fatal(ErrorKind kind, const char *fmt, ...) {
     fprintf(stderr, "\n");
     exit(1);
 }
+
+void warn_at(SrcLoc loc, const char *fmt, ...) {
+    fprintf(stderr, "\033[1;33mwarning\033[0m");
+    if (loc.filename) {
+        fprintf(stderr, " in %s", loc.filename);
+    }
+    if (loc.line > 0) {
+        fprintf(stderr, ":%d:%d", loc.line, loc.col);
+    }
+    fprintf(stderr, ": ");
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+
+    fprintf(stderr, "\n");
+
+    /* Show the source line if available */
+    if (g_source && loc.line > 0) {
+        const char *line_start, *line_end;
+        find_line(g_source, loc.line, &line_start, &line_end);
+
+        fprintf(stderr, "  %d | ", loc.line);
+        fwrite(line_start, 1, line_end - line_start, stderr);
+        fprintf(stderr, "\n");
+
+        fprintf(stderr, "  %*s | ", loc.line >= 10 ? 2 : 1, "");
+        for (int i = 1; i < loc.col; i++) {
+            fputc(' ', stderr);
+        }
+        fprintf(stderr, "\033[1;33m^\033[0m\n");
+    }
+}

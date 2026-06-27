@@ -21,6 +21,57 @@ static int cur_is(TokenType t) { return cur()->type == t; }
 static int peek_is(TokenType t) { return peek()->type == t; }
 
 /* ------------------------------------------------------------------ */
+/*  CamelCase enforcement                                              */
+/* ------------------------------------------------------------------ */
+static void check_var_camel_case(SrcLoc loc, const char *name) {
+    if (!name || !*name) return;
+    /* Skip reserved names */
+    if (strcmp(name, "self") == 0 || strcmp(name, "super") == 0 ||
+        strcmp(name, "main") == 0 || strcmp(name, "NULL") == 0)
+        return;
+    /* Must start with lowercase */
+    if (name[0] >= 'A' && name[0] <= 'Z') {
+        warn_at(loc, "variable '%s' should use camelCase (start with lowercase)", name);
+        return;
+    }
+    /* Must not contain underscores */
+    for (const char *p = name; *p; p++) {
+        if (*p == '_') {
+            warn_at(loc, "variable '%s' should use camelCase (no underscores)", name);
+            return;
+        }
+    }
+}
+
+static void check_class_camel_case(SrcLoc loc, const char *name) {
+    if (!name || !*name) return;
+    /* Must start with uppercase */
+    if (name[0] >= 'a' && name[0] <= 'z') {
+        warn_at(loc, "class/struct '%s' should use PascalCase (start with uppercase)", name);
+        return;
+    }
+    /* Must not contain underscores */
+    for (const char *p = name; *p; p++) {
+        if (*p == '_') {
+            warn_at(loc, "class/struct '%s' should use PascalCase (no underscores)", name);
+            return;
+        }
+    }
+}
+
+static void check_func_camel_case(SrcLoc loc, const char *name) {
+    if (!name || !*name) return;
+    if (strcmp(name, "main") == 0) return;
+    /* Must not contain underscores */
+    for (const char *p = name; *p; p++) {
+        if (*p == '_') {
+            warn_at(loc, "function '%s' should use camelCase (no underscores)", name);
+            return;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Forward declarations                                               */
 /* ------------------------------------------------------------------ */
 static AstNode *parse_statement(void);
@@ -137,6 +188,7 @@ static AstNode *parse_param(void) {
 
     AstNode *type = parse_type();
     Token name = expect(TOK_IDENT);
+    check_var_camel_case(name.loc, name.value);
     return ast_new_param(loc, type->as.ident.name, name.value, is_borrow, 0);
 }
 
@@ -430,6 +482,7 @@ static AstNode *parse_var_decl_or_expr(void) {
         adv();
         AstNode *type = parse_type();
         Token name = expect(TOK_IDENT);
+        check_var_camel_case(name.loc, name.value);
         AstNode *init = NULL;
         if (match(TOK_ASSIGN)) {
             init = parse_expr();
@@ -454,6 +507,7 @@ static AstNode *parse_var_decl_or_expr(void) {
     if (is_ident_like_type() && (peek_is(TOK_IDENT) || peek_is(TOK_STAR))) {
         AstNode *type = parse_type();
         Token name = expect(TOK_IDENT);
+        check_var_camel_case(name.loc, name.value);
         AstNode *init = NULL;
         if (match(TOK_ASSIGN)) {
             init = parse_expr();
@@ -525,6 +579,7 @@ static AstNode *parse_struct_decl(void) {
     SrcLoc loc = cur()->loc;
     adv();
     Token name = expect(TOK_IDENT);
+    check_class_camel_case(name.loc, name.value);
     AstNode *s = ast_new_struct_decl(loc, name.value);
     expect(TOK_LBRACE);
     while (!cur_is(TOK_RBRACE) && !cur_is(TOK_EOF)) {
@@ -544,6 +599,7 @@ static AstNode *parse_enum_decl(void) {
     SrcLoc loc = cur()->loc;
     adv(); /* consume 'enum' */
     Token name = expect(TOK_IDENT);
+    check_class_camel_case(name.loc, name.value);
     AstNode *e = ast_new_enum_decl(loc, name.value);
     expect(TOK_LBRACE);
     while (!cur_is(TOK_RBRACE) && !cur_is(TOK_EOF)) {
@@ -569,6 +625,7 @@ static AstNode *parse_union_decl(void) {
     SrcLoc loc = cur()->loc;
     adv(); /* consume 'union' */
     Token name = expect(TOK_IDENT);
+    check_class_camel_case(name.loc, name.value);
     AstNode *u = ast_new_union_decl(loc, name.value);
     expect(TOK_LBRACE);
     while (!cur_is(TOK_RBRACE) && !cur_is(TOK_EOF)) {
@@ -588,6 +645,7 @@ static AstNode *parse_class_decl(void) {
     SrcLoc loc = cur()->loc;
     adv();
     Token name = expect(TOK_IDENT);
+    check_class_camel_case(name.loc, name.value);
     char *parent = NULL;
     if (match(TOK_EXTENDS)) {
         Token p = expect(TOK_IDENT);
@@ -633,6 +691,7 @@ static AstNode *parse_func_decl(int is_method) {
     SrcLoc loc = cur()->loc;
     AstNode *ret_type = parse_type();
     Token name = expect(TOK_IDENT);
+    if (!is_method) check_func_camel_case(name.loc, name.value);
     expect(TOK_LPAREN);
     NodeList params = parse_param_list();
     expect(TOK_RPAREN);
@@ -740,11 +799,11 @@ static AstNode *parse_header_file(const char *filepath) {
 
             /* Extract the function name from the declaration.
              * Format: "ret_type name(args)" or "ret_type name(args) const"
-             * We need the 'name' part. */
+             * We need the 'name' part and the arg types for mangling. */
             char *open_paren = strchr(decl, '(');
             if (open_paren) {
                 *open_paren = '\0';
-                /* The function name is the last identifier before '(' */
+                /* decl is now "ret_type name" — extract both */
                 char *name_end = open_paren - 1;
                 while (name_end > decl && (*name_end == ' ' || *name_end == '\t'))
                     name_end--;
@@ -759,8 +818,75 @@ static AstNode *parse_header_file(const char *filepath) {
                     memcpy(func_name, name_start, name_len);
                     func_name[name_len] = '\0';
 
-                    nodelist_push(&import_node->as.import.func_maps,
-                        ast_new_func_map(loc, func_name, c_name));
+                    /* Extract return type: everything before the function name */
+                    char ret_type[256] = "void";
+                    {
+                        size_t rt_len = name_start - decl;
+                        while (rt_len > 0 && (decl[rt_len-1] == ' ' || decl[rt_len-1] == '\t'))
+                            rt_len--;
+                        if (rt_len < sizeof(ret_type) && rt_len > 0) {
+                            memcpy(ret_type, decl, rt_len);
+                            ret_type[rt_len] = '\0';
+                        }
+                    }
+
+                    /* Extract parameter types for name mangling */
+                    char *args_str = open_paren + 1;
+                    char *close_paren = strchr(args_str, ')');
+                    if (close_paren) *close_paren = '\0';
+
+                    /* Build mangled name: _pC<name><type_chars> */
+                    char mangled[512];
+                    size_t mpos = 0;
+                    mpos += snprintf(mangled + mpos, sizeof(mangled) - mpos, "_pC%s", func_name);
+
+                    /* Collect param types for LLVM type construction */
+                    const char *param_types[32];
+                    size_t param_count = 0;
+
+                    /* Parse comma-separated args */
+                    char *arg = trim(args_str);
+                    while (*arg) {
+                        char *comma = strchr(arg, ',');
+                        if (comma) *comma = '\0';
+                        char *a = trim(arg);
+                        /* Extract type: everything before the param name */
+                        char *space = strchr(a, ' ');
+                        if (space) {
+                            *space = '\0';
+                            const char *t = a;
+                            /* Store param type for LLVM type building */
+                            if (param_count < 32)
+                                param_types[param_count++] = t;
+                            /* If type has *, it's a pointer → mangle as 'p' */
+                            if (strchr(a, '*')) {
+                                mangled[mpos++] = 'p';
+                            } else if (strcmp(t, "int") == 0)        mangled[mpos++] = 'i';
+                            else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                            else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
+                            else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
+                            else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                            else {
+                                size_t tlen = strlen(t);
+                                mangled[mpos++] = 'p';
+                                if (tlen > 0) mangled[mpos++] = t[0];
+                            }
+                        }
+                        if (comma) { arg = comma + 1; }
+                        else break;
+                    }
+                    mangled[mpos] = '\0';
+
+                    /* Store the mangled name as pc_name with type info */
+                    AstNode *fm = ast_new_func_map(loc, mangled, c_name);
+                    fm->as.func_map.ret_type = strdup(ret_type);
+                    fm->as.func_map.param_count = param_count;
+                    if (param_count > 0) {
+                        fm->as.func_map.param_types = malloc(param_count * sizeof(char *));
+                        for (size_t pi = 0; pi < param_count; pi++)
+                            fm->as.func_map.param_types[pi] = strdup(param_types[pi]);
+                    }
+                    nodelist_push(&import_node->as.import.func_maps, fm);
                 }
             }
         }

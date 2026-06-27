@@ -1,0 +1,25 @@
+#import std.io;
+
+int main() {
+    int x = 42;
+    float pi = 3.14;
+    string s = "100";
+    int b = 1;
+
+    string sx = x.toS();
+    io.println(sx);
+
+    int si = s.toI();
+    io.println_int(si);
+
+    string fx = x.toF().toS();
+    io.println(fx);
+
+    string sp = pi.toS();
+    io.println(sp);
+
+    string sb = b.toB().toS();
+    io.println(sb);
+
+    return 0;
+}
