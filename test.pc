@@ -6,6 +6,6 @@ int factorial(int x){
 }
 int main()
 {
-    io.print(factorial(5).toS() + "\n");
-    io.print(f"{1.toS()}p")
+    io.print(factorial(0).toS() + "\n");
+    io.print(f"{factorial(5)}\n")
 }

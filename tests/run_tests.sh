@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BIN="$PROJECT_DIR/penguinc"
 STDLIB_DIR="$PROJECT_DIR/stdlib"
+RUNTIME_DIR="$PROJECT_DIR/runtime"
 TMPDIR=$(mktemp -d)
 
 PASS=0
@@ -71,7 +72,7 @@ run_test() {
     fi
 
     # Link
-    if ! gcc "$obj" $stdlib_objs -o "$exe" 2>/dev/null; then
+    if ! gcc "$obj" $stdlib_objs "$RUNTIME_DIR/arc.o" -o "$exe" 2>/dev/null; then
         echo "  FAIL: $name (linking failed)"
         FAIL=$((FAIL + 1))
         return

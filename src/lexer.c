@@ -136,17 +136,34 @@ static Token next_token(Lexer *lex) {
     int start_col  = lex->col;
 
     /* ---- f-strings: f"..." (must check before identifiers) ---- */
-    if (c == 'f' && peek_char(lex) == '"') {
+    if (c == 'f' && (peek_char(lex) == '"' || peek_char(lex) == '\'')) {
+        char quote = peek_char(lex);
         advance(lex); /* skip 'f' */
-        advance(lex); /* skip '"' */
+        advance(lex); /* skip opening quote */
         char buf[4096];
         size_t len = 0;
-        while (cur_char(lex) != '"' && cur_char(lex) != '\0') {
+        while (cur_char(lex) != quote && cur_char(lex) != '\0') {
             if (cur_char(lex) == '\\') {
                 advance(lex);
                 if (cur_char(lex) == '\0')
                     error_at((SrcLoc){lex->filename, lex->line, lex->col},
                              ERR_LEXER, "unterminated escape in f-string");
+                char esc = cur_char(lex);
+                char resolved;
+                switch (esc) {
+                    case 'n':  resolved = '\n'; break;
+                    case 't':  resolved = '\t'; break;
+                    case 'r':  resolved = '\r'; break;
+                    case '\\': resolved = '\\'; break;
+                    case '"':  resolved = '"';  break;
+                    case '\'': resolved = '\''; break;
+                    case '0':  resolved = '\0'; break;
+                    default:   resolved = esc;  break;
+                }
+                if (len < sizeof(buf) - 1)
+                    buf[len++] = resolved;
+                advance(lex);
+                continue;
             }
             if (len < sizeof(buf) - 1)
                 buf[len++] = cur_char(lex);
@@ -155,9 +172,9 @@ static Token next_token(Lexer *lex) {
         if (cur_char(lex) == '\0')
             error_at((SrcLoc){lex->filename, start_line, start_col},
                      ERR_LEXER, "unterminated f-string literal");
-        advance(lex); /* skip closing " */
+        advance(lex); /* skip closing quote */
         buf[len] = '\0';
-        Token t = make_token_with_value(lex, TOK_STRING_LIT, buf, len);
+        Token t = make_token_with_value(lex, TOK_FSTRING_LIT, buf, len);
         t.loc.line = start_line;
         t.loc.col  = start_col;
         return t;
@@ -205,13 +222,12 @@ static Token next_token(Lexer *lex) {
     }
 
     /* ---- string literals ---- */
-    if (c == '"') {
-        advance(lex); /* skip opening " */
-        /* Determine if this is an f-string */
-        /* For now, plain string literal */
+    if (c == '"' || c == '\'') {
+        char quote = c;
+        advance(lex); /* skip opening quote */
         char buf[4096];
         size_t len = 0;
-        while (cur_char(lex) != '"' && cur_char(lex) != '\0') {
+        while (cur_char(lex) != quote && cur_char(lex) != '\0') {
             if (cur_char(lex) == '\\') {
                 advance(lex);
                 if (cur_char(lex) == '\0') {
@@ -227,6 +243,7 @@ static Token next_token(Lexer *lex) {
                     case 'r':  resolved = '\r'; break;
                     case '\\': resolved = '\\'; break;
                     case '"':  resolved = '"';  break;
+                    case '\'': resolved = '\''; break;
                     case '0':  resolved = '\0'; break;
                     default:   resolved = esc;  break;
                 }
@@ -244,7 +261,7 @@ static Token next_token(Lexer *lex) {
                                    : (SrcLoc){NULL, start_line, start_col},
                      ERR_LEXER, "unterminated string literal");
         }
-        advance(lex); /* skip closing " */
+        advance(lex); /* skip closing quote */
         buf[len] = '\0';
         Token t = make_token_with_value(lex, TOK_STRING_LIT, buf, len);
         t.loc.line = start_line;
@@ -400,6 +417,7 @@ const char *token_type_name(TokenType type) {
         case TOK_INT_LIT:      return "integer literal";
         case TOK_FLOAT_LIT:    return "float literal";
         case TOK_STRING_LIT:   return "string literal";
+        case TOK_FSTRING_LIT:  return "f-string literal";
         case TOK_IDENT:        return "identifier";
         case TOK_INT:          return "'int'";
         case TOK_VOID:         return "'void'";

@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+extern void *arc_alloc(size_t size);
+
 static void write_long(long val) {
     char buf[32];
     int i = 31;
@@ -63,7 +65,7 @@ long penguin_strlen(const char *s) {
 char *penguin_str_concat(const char *a, const char *b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
-    char *out = malloc(la + lb + 1);
+    char *out = arc_alloc(la + lb + 1);
     memcpy(out, a, la);
     memcpy(out + la, b, lb + 1);
     return out;
@@ -79,7 +81,7 @@ char *int_to_string(long val) {
     else { while (val > 0) { buf[--i] = '0' + (val % 10); val /= 10; } }
     if (neg) buf[--i] = '-';
     size_t len = 31 - i;
-    char *out = malloc(len + 1);
+    char *out = arc_alloc(len + 1);
     memcpy(out, buf + i, len + 1);
     return out;
 }
@@ -87,7 +89,7 @@ char *int_to_string(long val) {
 char *float_to_string(double val) {
     char buf[64];
     int n = snprintf(buf, sizeof(buf), "%g", val);
-    char *out = malloc(n + 1);
+    char *out = arc_alloc(n + 1);
     memcpy(out, buf, n + 1);
     return out;
 }
@@ -95,7 +97,7 @@ char *float_to_string(double val) {
 char *bool_to_string(long val) {
     const char *s = val ? "true" : "false";
     size_t len = val ? 4 : 5;
-    char *out = malloc(len + 1);
+    char *out = arc_alloc(len + 1);
     memcpy(out, s, len + 1);
     return out;
 }

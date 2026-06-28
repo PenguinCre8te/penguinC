@@ -1140,6 +1140,78 @@ static AstNode *parse_postfix(void) {
     return expr;
 }
 
+static AstNode *parse_fstring(SrcLoc loc, const char *raw) {
+    AstNode *fstr = ast_new_fstring(loc);
+    const char *p = raw;
+    char text_buf[4096];
+    size_t text_len = 0;
+
+    while (*p) {
+        if (*p == '{') {
+            /* Emit any accumulated text before the expression */
+            if (text_len > 0) {
+                text_buf[text_len] = '\0';
+                nodelist_push(&fstr->as.fstring.parts,
+                    ast_new_fstring_part(loc, text_buf, NULL));
+                text_len = 0;
+            }
+            p++; /* skip '{' */
+
+            /* Find matching '}' counting nested braces */
+            int depth = 1;
+            const char *expr_start = p;
+            while (*p && depth > 0) {
+                if (*p == '{') depth++;
+                else if (*p == '}') depth--;
+                if (depth > 0) p++;
+            }
+            if (depth != 0)
+                error_at(loc, ERR_PARSER, "unterminated '{' in f-string");
+            size_t expr_len = p - expr_start;
+            p++; /* skip '}' */
+
+            /* Parse the expression using a temporary lexer */
+            char *expr_str = malloc(expr_len + 1);
+            memcpy(expr_str, expr_start, expr_len);
+            expr_str[expr_len] = '\0';
+
+            Lexer *saved_P = P;
+            Lexer tmp_lex;
+            lexer_init(&tmp_lex, loc.filename, expr_str);
+            P = &tmp_lex;
+            AstNode *expr = parse_expr();
+            P = saved_P;
+            free(expr_str);
+
+            nodelist_push(&fstr->as.fstring.parts,
+                ast_new_fstring_part(loc, NULL, expr));
+        } else if (*p == '}' || *p == '\0') {
+            break;
+        } else {
+            if (text_len < sizeof(text_buf) - 1)
+                text_buf[text_len++] = *p;
+            p++;
+        }
+    }
+
+    /* Emit any trailing text */
+    if (text_len > 0) {
+        text_buf[text_len] = '\0';
+        nodelist_push(&fstr->as.fstring.parts,
+            ast_new_fstring_part(loc, text_buf, NULL));
+    }
+
+    /* If there's only one text part and no expressions, return a plain string */
+    if (fstr->as.fstring.parts.count == 1) {
+        AstNode *only = fstr->as.fstring.parts.items[0];
+        if (only->type == NODE_FSTRING_PART && only->as.fstring_part.expr == NULL) {
+            return ast_new_string_lit(loc, only->as.fstring_part.text);
+        }
+    }
+
+    return fstr;
+}
+
 static AstNode *parse_primary(void) {
     SrcLoc loc = cur()->loc;
 
@@ -1158,6 +1230,11 @@ static AstNode *parse_primary(void) {
             Token t = *cur();
             adv();
             return ast_new_string_lit(loc, t.value);
+        }
+        case TOK_FSTRING_LIT: {
+            Token t = *cur();
+            adv();
+            return parse_fstring(loc, t.value);
         }
         case TOK_TRUE:  { adv(); return ast_new_int_lit(loc, 1); }
         case TOK_FALSE: { adv(); return ast_new_int_lit(loc, 0); }

@@ -378,9 +378,11 @@ int main(int argc, char **argv) {
         snprintf(imports_path, sizeof(imports_path), "%s.imports", output_file);
         FILE *f = fopen(imports_path, "r");
         if (f) {
-            /* Find stdlib directory */
+            /* Find stdlib and runtime directories */
             const char *stdlib = getenv("STDLIB");
             if (!stdlib) stdlib = "stdlib";
+            const char *runtime = getenv("RUNTIME");
+            if (!runtime) runtime = "runtime";
 
             /* The object file has .o appended by codegen */
             char obj_file[512];
@@ -389,6 +391,15 @@ int main(int argc, char **argv) {
             /* Build gcc command */
             char cmd[4096];
             snprintf(cmd, sizeof(cmd), "gcc \"%s\"", obj_file);
+
+            /* Always link runtime/arc.o */
+            char arc_obj[1024];
+            snprintf(arc_obj, sizeof(arc_obj), "%s/arc.o", runtime);
+            if (access(arc_obj, F_OK) == 0) {
+                char append[1200];
+                snprintf(append, sizeof(append), " \"%s\"", arc_obj);
+                strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
+            }
 
             char line[256];
             while (fgets(line, sizeof(line), f)) {

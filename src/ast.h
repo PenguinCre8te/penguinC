@@ -11,6 +11,7 @@ typedef enum {
     TOK_INT_LIT,
     TOK_FLOAT_LIT,
     TOK_STRING_LIT,
+    TOK_FSTRING_LIT,
     TOK_IDENT,
 
     /* Keywords */

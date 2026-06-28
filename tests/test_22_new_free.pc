@@ -1,9 +1,7 @@
 #import std.io;
-#import std.mem;
 int main() {
     int* p = new int(0);
     *p = 42;
     io.println_int(*p);
-    mem.drop(p);
     return 0;
 }

@@ -60,6 +60,7 @@ typedef struct {
     size_t label_cap;
 
     int loop_depth;
+    size_t scope_base;
 } CodegenCtx;
 
 static void mangle_name(char *buf, size_t buflen, const char *name,
@@ -214,6 +215,16 @@ static LLVMValueRef var_lookup(CodegenCtx *cg, const char *name) {
             return cg->vars[i - 1].val;
     }
     return NULL;
+}
+
+static int var_lookup_index(CodegenCtx *cg, const char *name, size_t *out_index) {
+    for (size_t i = cg->var_count; i > 0; i--) {
+        if (strcmp(cg->vars[i - 1].name, name) == 0) {
+            *out_index = i - 1;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static LLVMTypeRef var_lookup_type(CodegenCtx *cg, const char *name) {
@@ -381,6 +392,69 @@ static LLVMValueRef call_free(CodegenCtx *cg, LLVMValueRef ptr) {
     LLVMValueRef casted = LLVMBuildBitCast(cg->builder, ptr,
         LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0), "free.cast");
     return LLVMBuildCall2(cg->builder, free_fn_type, fn, (LLVMValueRef[]){ casted }, 1, "");
+}
+
+/* ------------------------------------------------------------------ */
+/*  ARC (Automatic Reference Counting) helpers                         */
+/* ------------------------------------------------------------------ */
+static LLVMTypeRef arc_i8ptr;
+
+static void init_arc_types(CodegenCtx *cg) {
+    arc_i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+}
+
+static LLVMValueRef get_or_declare_arc_fn(CodegenCtx *cg, const char *name, LLVMTypeRef fn_ty) {
+    LLVMValueRef fn = LLVMGetNamedFunction(cg->module, name);
+    if (!fn) {
+        fn = LLVMAddFunction(cg->module, name, fn_ty);
+        fn_type_push(cg, name, fn_ty);
+    }
+    return fn;
+}
+
+static LLVMValueRef call_arc_alloc(CodegenCtx *cg, LLVMValueRef size) {
+    LLVMTypeRef fn_ty = LLVMFunctionType(arc_i8ptr, (LLVMTypeRef[]){LLVMInt64TypeInContext(cg->ctx)}, 1, 0);
+    LLVMValueRef fn = get_or_declare_arc_fn(cg, "arc_alloc", fn_ty);
+    return LLVMBuildCall2(cg->builder, fn_ty, fn, &size, 1, "arc.alloc");
+}
+
+static LLVMValueRef call_arc_retain(CodegenCtx *cg, LLVMValueRef ptr) {
+    LLVMTypeRef fn_ty = LLVMFunctionType(arc_i8ptr, (LLVMTypeRef[]){arc_i8ptr}, 1, 0);
+    LLVMValueRef fn = get_or_declare_arc_fn(cg, "arc_retain", fn_ty);
+    return LLVMBuildCall2(cg->builder, fn_ty, fn, &ptr, 1, "arc.retain");
+}
+
+static void call_arc_release(CodegenCtx *cg, LLVMValueRef ptr) {
+    LLVMTypeRef fn_ty = LLVMFunctionType(LLVMVoidTypeInContext(cg->ctx), (LLVMTypeRef[]){arc_i8ptr}, 1, 0);
+    LLVMValueRef fn = get_or_declare_arc_fn(cg, "arc_release", fn_ty);
+    LLVMBuildCall2(cg->builder, fn_ty, fn, &ptr, 1, "");
+}
+
+static int is_arc_type(CodegenCtx *cg, const char *type_name) {
+    if (!type_name) return 0;
+    if (strcmp(type_name, "string") == 0) return 1;
+    if (struct_lookup(cg, type_name)) return 1;
+    /* Pointer types (int*, float*, etc.) */
+    size_t len = strlen(type_name);
+    if (len > 1 && type_name[len - 1] == '*') return 1;
+    return 0;
+}
+
+static int is_arc_type_for_var(CodegenCtx *cg, size_t var_index) {
+    const char *tn = cg->vars[var_index].type_name;
+    if (is_arc_type(cg, tn)) return 1;
+    /* Also check if it's a pointer type (elem_ty set = class instance pointer) */
+    if (cg->vars[var_index].elem_ty) return 1;
+    return 0;
+}
+
+static void codegen_arc_release_var(CodegenCtx *cg, size_t var_index) {
+    if (!is_arc_type_for_var(cg, var_index)) return;
+    /* Only release if the variable holds a pointer type */
+    if (LLVMGetTypeKind(cg->vars[var_index].ty) != LLVMPointerTypeKind) return;
+    LLVMValueRef val = LLVMBuildLoad2(cg->builder,
+        cg->vars[var_index].ty, cg->vars[var_index].val, "arc.cleanup");
+    call_arc_release(cg, val);
 }
 
 static void codegen_block(CodegenCtx *cg, AstNode *node) {
@@ -599,6 +673,15 @@ static LLVMValueRef codegen_assign(CodegenCtx *cg, AstNode *node) {
     if (!target || !value) return NULL;
     const char *op = node->as.assign.op;
     if (strcmp(op, "=") == 0) {
+        /* ARC: release old value if target is an ARC variable */
+        if (node->as.assign.target->type == NODE_IDENTIFIER) {
+            const char *var_name = node->as.assign.target->as.ident.name;
+            size_t vi;
+            if (var_lookup_index(cg, var_name, &vi) && is_arc_type_for_var(cg, vi)) {
+                LLVMValueRef old_val = LLVMBuildLoad2(cg->builder, cg->vars[vi].ty, cg->vars[vi].val, "arc.old");
+                call_arc_release(cg, old_val);
+            }
+        }
         LLVMBuildStore(cg->builder, value, target);
         return value;
     }
@@ -881,7 +964,7 @@ static LLVMValueRef codegen_sizeof(CodegenCtx *cg, AstNode *node) {
 static LLVMValueRef codegen_new_expr(CodegenCtx *cg, AstNode *node) {
     LLVMTypeRef ty = resolve_type(cg, node->as.new_expr.type_name);
     LLVMValueRef size = LLVMSizeOf(ty);
-    LLVMValueRef ptr = call_malloc(cg, size);
+    LLVMValueRef ptr = call_arc_alloc(cg, size);
     LLVMValueRef typed = LLVMBuildBitCast(cg->builder, ptr,
         LLVMPointerType(ty, 0), "new.typed");
     if (node->as.new_expr.args.count > 0) {
@@ -1017,13 +1100,86 @@ static LLVMValueRef codegen_range(CodegenCtx *cg, AstNode *node) {
     return codegen_expr(cg, node->as.range.start);
 }
 
-static LLVMValueRef codegen_fstring(CodegenCtx *cg, AstNode *node) {
-    if (node->as.fstring.parts.count > 0) {
-        AstNode *first = node->as.fstring.parts.items[0];
-        if (first->type == NODE_FSTRING_PART && first->as.fstring_part.text)
-            return LLVMBuildGlobalStringPtr(cg->builder, first->as.fstring_part.text, "fstr");
+static LLVMValueRef codegen_auto_tostring(CodegenCtx *cg, LLVMValueRef val) {
+    LLVMTypeRef val_ty = LLVMTypeOf(val);
+    LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+    LLVMTypeRef f64_ty = LLVMDoubleTypeInContext(cg->ctx);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+
+    /* Already a string (pointer) — return as-is */
+    if (LLVMGetTypeKind(val_ty) == LLVMPointerTypeKind)
+        return val;
+
+    /* Integer types */
+    if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
+        if (LLVMGetIntTypeWidth(val_ty) == 1) {
+            /* bool → bool_to_string */
+            LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_ty}, 1, 0);
+            LLVMValueRef fn = get_or_declare_runtime_fn(cg, "bool_to_string", fn_ty);
+            LLVMValueRef ext = LLVMBuildZExt(cg->builder, val, i64_ty, "bext");
+            return LLVMBuildCall2(cg->builder, fn_ty, fn, &ext, 1, "tos");
+        }
+        /* int → int_to_string */
+        LLVMValueRef ext = LLVMBuildSExtOrBitCast(cg->builder, val, i64_ty, "iext");
+        LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_ty}, 1, 0);
+        LLVMValueRef fn = get_or_declare_runtime_fn(cg, "int_to_string", fn_ty);
+        return LLVMBuildCall2(cg->builder, fn_ty, fn, &ext, 1, "tos");
     }
-    return LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
+
+    /* Float types */
+    if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind) {
+        LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){f64_ty}, 1, 0);
+        LLVMValueRef fn = get_or_declare_runtime_fn(cg, "float_to_string", fn_ty);
+        return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tos");
+    }
+
+    return val;
+}
+
+static LLVMValueRef codegen_fstring(CodegenCtx *cg, AstNode *node) {
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+    LLVMTypeRef str_concat_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
+    LLVMValueRef str_concat_fn = get_or_declare_runtime_fn(cg,
+        func_map_lookup(cg, "io.str_concat") ? func_map_lookup(cg, "io.str_concat") : "penguin_str_concat",
+        str_concat_ty);
+
+    size_t count = node->as.fstring.parts.count;
+    if (count == 0)
+        return LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
+
+    /* Convert first part to string */
+    LLVMValueRef result = NULL;
+    AstNode *first = node->as.fstring.parts.items[0];
+    if (first->type == NODE_FSTRING_PART) {
+        if (first->as.fstring_part.text) {
+            result = LLVMBuildGlobalStringPtr(cg->builder, first->as.fstring_part.text, "fstr");
+        } else if (first->as.fstring_part.expr) {
+            result = codegen_expr(cg, first->as.fstring_part.expr);
+            result = codegen_auto_tostring(cg, result);
+        }
+    }
+    if (!result)
+        result = LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
+
+    /* Concatenate remaining parts */
+    for (size_t i = 1; i < count; i++) {
+        AstNode *part = node->as.fstring.parts.items[i];
+        LLVMValueRef part_val = NULL;
+        if (part->type == NODE_FSTRING_PART) {
+            if (part->as.fstring_part.text) {
+                part_val = LLVMBuildGlobalStringPtr(cg->builder, part->as.fstring_part.text, "fstr");
+            } else if (part->as.fstring_part.expr) {
+                part_val = codegen_expr(cg, part->as.fstring_part.expr);
+                part_val = codegen_auto_tostring(cg, part_val);
+            }
+        }
+        if (!part_val)
+            part_val = LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
+        result = LLVMBuildCall2(cg->builder, str_concat_ty, str_concat_fn,
+            (LLVMValueRef[]){result, part_val}, 2, "fstr.cat");
+    }
+
+    return result;
 }
 
 static LLVMValueRef codegen_fstring_part(CodegenCtx *cg, AstNode *node) {
@@ -1087,6 +1243,18 @@ static LLVMValueRef codegen_expr(CodegenCtx *cg, AstNode *node) {
 static void codegen_return(CodegenCtx *cg, AstNode *node) {
     if (node->as.ret.value) {
         LLVMValueRef val = codegen_expr(cg, node->as.ret.value);
+        /* ARC: release all locals in current scope, retain return value */
+        for (size_t i = cg->var_count; i > cg->scope_base; i--) {
+            codegen_arc_release_var(cg, i - 1);
+        }
+        /* Retain return value if heap type */
+        if (node->as.ret.value->type == NODE_IDENTIFIER) {
+            const char *vn = node->as.ret.value->as.ident.name;
+            size_t vi;
+            if (var_lookup_index(cg, vn, &vi) && is_arc_type_for_var(cg, vi)) {
+                val = call_arc_retain(cg, val);
+            }
+        }
         LLVMBuildRet(cg->builder, val);
     } else {
         LLVMBuildRetVoid(cg->builder);
@@ -1142,6 +1310,16 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
             if (LLVMGetTypeKind(init_ty) == LLVMIntegerTypeKind &&
                 LLVMGetTypeKind(ty) == LLVMPointerTypeKind) {
                 init_val = LLVMBuildIntToPtr(cg->builder, init_val, ty, "inttoptr");
+            } else if (LLVMGetTypeKind(init_ty) == LLVMIntegerTypeKind &&
+                       LLVMGetTypeKind(ty) == LLVMIntegerTypeKind &&
+                       LLVMGetIntTypeWidth(init_ty) != LLVMGetIntTypeWidth(ty)) {
+                init_val = LLVMBuildIntCast2(cg->builder, init_val, ty, 1, "coerce");
+            } else if (LLVMGetTypeKind(init_ty) == LLVMDoubleTypeKind &&
+                       LLVMGetTypeKind(ty) == LLVMIntegerTypeKind) {
+                init_val = LLVMBuildFPToSI(cg->builder, init_val, ty, "coerce");
+            } else if (LLVMGetTypeKind(init_ty) == LLVMIntegerTypeKind &&
+                       LLVMGetTypeKind(ty) == LLVMDoubleTypeKind) {
+                init_val = LLVMBuildSIToFP(cg->builder, init_val, ty, "coerce");
             }
             LLVMBuildStore(cg->builder, init_val, alloca_inst);
         }
@@ -1469,7 +1647,12 @@ static void codegen_match(CodegenCtx *cg, AstNode *node) {
 }
 
 static void codegen_using(CodegenCtx *cg, AstNode *node) {
+    /* using(expr) { body } — evaluate expr, execute body, release expr */
+    LLVMValueRef resource = codegen_expr(cg, node->as.using_stmt.resource);
     codegen_block(cg, node->as.using_stmt.body);
+    if (resource && LLVMGetTypeKind(LLVMTypeOf(resource)) == LLVMPointerTypeKind) {
+        call_arc_release(cg, resource);
+    }
 }
 
 static void codegen_unsafe(CodegenCtx *cg, AstNode *node) {
@@ -1637,6 +1820,8 @@ static void mangle_call_name(char *buf, size_t buflen, const char *name,
                 } else if (strcmp(m, "toB") == 0) { buf[pos++] = 'b'; continue; }
             }
             buf[pos++] = 'i';
+        } else if (a->type == NODE_FSTRING) {
+            buf[pos++] = 's';
         } else { buf[pos++] = 'i'; }
     }
     buf[pos] = '\0';
@@ -1646,6 +1831,9 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     const char *name = node->as.func_decl.name;
     const char *ret_type_name = node->as.func_decl.ret_type;
     LLVMTypeRef ret_ty = resolve_type(cg, ret_type_name);
+    /* Class types are heap-allocated — return pointer-to-struct */
+    if (LLVMGetTypeKind(ret_ty) == LLVMStructTypeKind)
+        ret_ty = LLVMPointerType(ret_ty, 0);
 
     int is_method = node->as.func_decl.is_method;
     size_t user_param_count = node->as.func_decl.params.count;
@@ -1696,9 +1884,6 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef prev_fn = cg->cur_fn;
     cg->cur_fn = fn;
 
-    /* Save and reset variable scope */
-    size_t prev_var_count = cg->var_count;
-
     /* Name parameters */
     unsigned actual_params = LLVMCountParams(fn);
     for (unsigned i = 0; i < actual_params; i++) {
@@ -1735,10 +1920,18 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
         }
     }
 
+    /* Save variable scope AFTER parameters — parameters are borrowed, not owned */
+    size_t prev_var_count = cg->var_count;
+    cg->scope_base = prev_var_count;
+
     codegen_block(cg, node->as.func_decl.body);
 
     /* Add implicit return if no terminator */
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(cg->builder))) {
+        /* ARC: release all heap-typed locals before return */
+        for (size_t i = cg->var_count; i > prev_var_count; i--) {
+            codegen_arc_release_var(cg, i - 1);
+        }
         if (LLVMGetTypeKind(ret_ty) == LLVMVoidTypeKind)
             LLVMBuildRetVoid(cg->builder);
         else
@@ -1991,10 +2184,60 @@ int codegen(AstNode *program, const char *output_file, OptLevel opt) {
         .break_target = NULL, .continue_target = NULL,
         .labels = NULL, .label_count = 0, .label_cap = 0,
         .loop_depth = 0,
+        .scope_base = 0,
     };
+
+    init_arc_types(&cg);
 
     /* Pre-register struct types */
     codegen_program(&cg, program);
+
+    /* ARC optimization: eliminate redundant retain/release pairs */
+    {
+        LLVMValueRef func = LLVMGetFirstFunction(module);
+        while (func) {
+            if (LLVMCountBasicBlocks(func) > 0) {
+                LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(func);
+                while (bb) {
+                    LLVMValueRef inst = LLVMGetFirstInstruction(bb);
+                    while (inst) {
+                        LLVMValueRef next = LLVMGetNextInstruction(inst);
+                        /* Pattern: arc_retain(x) immediately followed by arc_release(x) → remove both */
+                        if (LLVMGetInstructionOpcode(inst) == LLVMCall) {
+                            LLVMValueRef called_fn = LLVMGetCalledValue(inst);
+                            if (LLVMGetValueKind(called_fn) == LLVMFunctionValueKind) {
+                                const char *fn_name = LLVMGetValueName(called_fn);
+                                if (fn_name && strcmp(fn_name, "arc_retain") == 0 && next) {
+                                    LLVMValueRef next_inst = next;
+                                    if (LLVMGetInstructionOpcode(next_inst) == LLVMCall) {
+                                        LLVMValueRef next_fn = LLVMGetCalledValue(next_inst);
+                                        if (LLVMGetValueKind(next_fn) == LLVMFunctionValueKind) {
+                                            const char *next_name = LLVMGetValueName(next_fn);
+                                            if (next_name && strcmp(next_name, "arc_release") == 0) {
+                                                /* Check if they operate on the same value */
+                                                LLVMValueRef retain_arg = LLVMGetOperand(inst, 0);
+                                                LLVMValueRef release_arg = LLVMGetOperand(next_inst, 0);
+                                                if (retain_arg == release_arg) {
+                                                    /* Remove both instructions */
+                                                    LLVMInstructionEraseFromParent(next_inst);
+                                                    LLVMInstructionEraseFromParent(inst);
+                                                    inst = next;
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        inst = next;
+                    }
+                    bb = LLVMGetNextBasicBlock(bb);
+                }
+            }
+            func = LLVMGetNextFunction(func);
+        }
+    }
 
     /* Verify module */
     char *verify_err = NULL;
