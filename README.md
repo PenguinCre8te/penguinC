@@ -1,4 +1,4 @@
-# AGENTS.md — penguinC
+# penguinC
 
 ## Overview
 
