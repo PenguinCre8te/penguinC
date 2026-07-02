@@ -2,14 +2,13 @@
 #import threads;
 
 int printpenguin(){
-    io.print("penguin\n")
     for i in 1..100000000 {}
+    io.print("penguin\n")
     return 1
 }
 
 int main(){
     threads.thread thread = threads.run(printpenguin)
     io.print("blah\n")
-    thread.join() // You can join like this
     io.print(f"{thread.get()}\n") // Or like this and get the return value
 }

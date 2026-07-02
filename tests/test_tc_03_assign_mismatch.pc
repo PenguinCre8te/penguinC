@@ -1,0 +1,4 @@
+#import std.io;
+int main() {
+    string x = 42;
+}

@@ -1,7 +1,7 @@
 #ifndef PENGUINC_CODEGEN_H
 #define PENGUINC_CODEGEN_H
 
-#include "ast.h"
+#include "frontend/ast.h"
 
 typedef enum {
     OPT_NONE = 0,

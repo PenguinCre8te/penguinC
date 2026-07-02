@@ -5,6 +5,7 @@
 #include "parser.h"
 #include "error.h"
 #include "codegen.h"
+#include "typecheck.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -369,6 +370,13 @@ int main(int argc, char **argv) {
     char *src = read_file(input_file);
     error_set_source(input_file, src);
     AstNode *ast = parse_file(input_file, src);
+
+    int tc_errors = typecheck(ast, input_file, src);
+    if (tc_errors > 0) {
+        fprintf(stderr, "penguinc: compilation aborted due to type errors\n");
+        free(src);
+        return 1;
+    }
 
     codegen(ast, output_file, opt, &links);
 
