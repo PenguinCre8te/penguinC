@@ -1,0 +1,24 @@
+#import std.io;
+#import threads;
+
+int add_one() {
+    return 1;
+}
+
+int add_two() {
+    return 2;
+}
+
+int add_three() {
+    return 3;
+}
+
+int main() {
+    threads.thread t1 = threads.run(add_one);
+    threads.thread t2 = threads.run(add_two);
+    threads.thread t3 = threads.run(add_three);
+    long r1 = t1.get();
+    long r2 = t2.get();
+    long r3 = t3.get();
+    io.print(f"{r1} {r2} {r3}\n");
+}

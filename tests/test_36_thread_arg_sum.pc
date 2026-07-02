@@ -1,0 +1,17 @@
+#import std.io;
+#import threads;
+
+int square(long n) {
+    return n * n;
+}
+
+int main() {
+    long sum = 0;
+    threads.thread t1 = threads.run(square, 1);
+    threads.thread t2 = threads.run(square, 2);
+    threads.thread t3 = threads.run(square, 3);
+    sum = sum + t1.get();
+    sum = sum + t2.get();
+    sum = sum + t3.get();
+    io.print(f"sum of squares: {sum}\n");
+}

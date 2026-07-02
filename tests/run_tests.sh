@@ -42,38 +42,13 @@ run_test() {
     fi
 
     local name=$(basename "$pc_file" .pc)
-    local obj="$TMPDIR/$name.o"
     local exe="$TMPDIR/$name"
-    local imports_file="$obj.imports"
 
-    # Compile
-    if ! "$BIN" -c -o "$obj" "$pc_file" 2>/dev/null; then
+    # Compile and link (compiler resolves imports and links automatically)
+    export STDLIB="$STDLIB_DIR"
+    export RUNTIME="$RUNTIME_DIR"
+    if ! "$BIN" -o "$exe" "$pc_file" 2>/dev/null; then
         echo "  FAIL: $name (compilation failed)"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    # Collect stdlib .o files from .imports
-    local stdlib_objs=""
-    if [ -f "$imports_file" ]; then
-        while IFS= read -r mod; do
-            # New path: stdlib/io/io.o
-            local mod_obj="$STDLIB_DIR/$mod/$mod.o"
-            if [ -f "$mod_obj" ]; then
-                stdlib_objs="$stdlib_objs $mod_obj"
-            else
-                # Fallback: old path stdlib/io.o
-                mod_obj="$STDLIB_DIR/$mod.o"
-                if [ -f "$mod_obj" ]; then
-                    stdlib_objs="$stdlib_objs $mod_obj"
-                fi
-            fi
-        done < "$imports_file"
-    fi
-
-    # Link
-    if ! gcc "$obj" $stdlib_objs "$RUNTIME_DIR/arc.o" -o "$exe" 2>/dev/null; then
-        echo "  FAIL: $name (linking failed)"
         FAIL=$((FAIL + 1))
         return
     fi
@@ -107,7 +82,7 @@ if [ $# -gt 0 ]; then
     done
 else
     # Run all tests
-    for t in $(seq 1 31); do
+    for t in $(seq 1 36); do
         run_test "$t" 2>/dev/null
     done
 fi

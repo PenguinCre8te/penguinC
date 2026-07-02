@@ -1,11 +1,15 @@
 #import std.io;
+#import threads;
 
-int factorial(int x){
-    if x == 1 return 1;
-    return x * factorial(x-1);
+int printpenguin(){
+    io.print("penguin\n")
+    for i in 1..100000000 {}
+    return 1
 }
-int main()
-{
-    io.print(factorial(0).toS() + "\n");
-    io.print(f"{factorial(5)}\n")
+
+int main(){
+    threads.thread thread = threads.run(printpenguin)
+    io.print("blah\n")
+    thread.join() // You can join like this
+    io.print(f"{thread.get()}\n") // Or like this and get the return value
 }

@@ -1,0 +1,15 @@
+#import std.io;
+#import threads;
+
+int worker() {
+    io.print("thread running\n");
+    return 42;
+}
+
+int main() {
+    threads.thread t = threads.run(worker);
+    io.print("main running\n");
+    t.join();
+    long result = t.get();
+    io.print(f"result: {result}\n");
+}

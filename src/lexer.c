@@ -286,6 +286,7 @@ static Token next_token(Lexer *lex) {
                 return make_token_with_value(lex, TOK_MINUS, "-", 1);
             case '*':
                 advance(lex);
+                if (c2 == '*') { advance(lex); return make_token_with_value(lex, TOK_STAR_STAR, "**", 2); }
                 if (c2 == '=') { advance(lex); return make_token_with_value(lex, TOK_STAR_ASSIGN, "*=", 2); }
                 return make_token_with_value(lex, TOK_STAR, "*", 1);
             case '/':
@@ -467,6 +468,7 @@ const char *token_type_name(TokenType type) {
         case TOK_MINUS_MINUS:  return "'--'";
         case TOK_MINUS_ASSIGN: return "'-='";
         case TOK_STAR_ASSIGN:  return "'*='";
+        case TOK_STAR_STAR:    return "'**'";
         case TOK_SLASH_ASSIGN: return "'/='";
         case TOK_DOT:          return "'.'";
         case TOK_COMMA:        return "','";

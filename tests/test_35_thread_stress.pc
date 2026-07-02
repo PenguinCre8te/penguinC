@@ -1,0 +1,19 @@
+#import std.io;
+#import threads;
+
+int compute(long n) {
+    return n * n;
+}
+
+int main() {
+    threads.thread t1 = threads.run(compute, 5);
+    threads.thread t2 = threads.run(compute, 7);
+    threads.thread t3 = threads.run(compute, 3);
+    threads.thread t4 = threads.run(compute, 10);
+    long r1 = t1.get();
+    long r2 = t2.get();
+    long r3 = t3.get();
+    long r4 = t4.get();
+    long total = r1 + r2 + r3 + r4;
+    io.print(f"total: {total}\n");
+}

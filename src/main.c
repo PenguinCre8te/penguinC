@@ -320,15 +320,15 @@ int main(int argc, char **argv) {
 
     const char *input_file = NULL;
     const char *output_file = NULL;
-    int explicit_output = 0;
+    int compile_only = 0;
     OptLevel opt = OPT_NONE;
+    LinkPaths links = {0};
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_file = argv[++i];
-            explicit_output = 1;
         } else if (strcmp(argv[i], "-c") == 0) {
-            explicit_output = 1;
+            compile_only = 1;
         } else if (strcmp(argv[i], "-O0") == 0) {
             opt = OPT_NONE;
         } else if (strcmp(argv[i], "-O1") == 0) {
@@ -370,67 +370,57 @@ int main(int argc, char **argv) {
     error_set_source(input_file, src);
     AstNode *ast = parse_file(input_file, src);
 
-    codegen(ast, output_file, opt);
+    codegen(ast, output_file, opt, &links);
 
-    /* Auto-link when no explicit -o: read .imports and invoke gcc */
-    if (!explicit_output) {
-        char imports_path[1024];
-        snprintf(imports_path, sizeof(imports_path), "%s.imports", output_file);
-        FILE *f = fopen(imports_path, "r");
-        if (f) {
-            /* Find stdlib and runtime directories */
-            const char *stdlib = getenv("STDLIB");
-            if (!stdlib) stdlib = "stdlib";
-            const char *runtime = getenv("RUNTIME");
-            if (!runtime) runtime = "runtime";
+    /* Auto-link when not compile-only: use resolved link paths */
+    if (!compile_only && links.count > 0) {
+        /* Find stdlib and runtime directories */
+        const char *stdlib = getenv("STDLIB");
+        if (!stdlib) stdlib = "stdlib";
+        const char *runtime = getenv("RUNTIME");
+        if (!runtime) runtime = "runtime";
 
-            /* The object file has .o appended by codegen */
-            char obj_file[512];
-            snprintf(obj_file, sizeof(obj_file), "%s.o", output_file);
+        /* The object file has .o appended by codegen */
+        char obj_file[512];
+        snprintf(obj_file, sizeof(obj_file), "%s.o", output_file);
 
-            /* Build gcc command */
-            char cmd[4096];
-            snprintf(cmd, sizeof(cmd), "gcc \"%s\"", obj_file);
+        /* Build gcc command */
+        char cmd[4096];
+        snprintf(cmd, sizeof(cmd), "gcc \"%s\"", obj_file);
 
-            /* Always link runtime/arc.o */
-            char arc_obj[1024];
-            snprintf(arc_obj, sizeof(arc_obj), "%s/arc.o", runtime);
-            if (access(arc_obj, F_OK) == 0) {
+        /* Always link runtime/arc.o */
+        char arc_obj[1024];
+        snprintf(arc_obj, sizeof(arc_obj), "%s/arc.o", runtime);
+        if (access(arc_obj, F_OK) == 0) {
+            char append[1200];
+            snprintf(append, sizeof(append), " \"%s\"", arc_obj);
+            strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
+        }
+
+        /* Link resolved import paths */
+        for (size_t i = 0; i < links.count; i++) {
+            const char *path = links.paths[i];
+            if (access(path, F_OK) == 0) {
                 char append[1200];
-                snprintf(append, sizeof(append), " \"%s\"", arc_obj);
+                snprintf(append, sizeof(append), " \"%s\"", path);
                 strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
             }
+        }
 
-            char line[256];
-            while (fgets(line, sizeof(line), f)) {
-                /* Trim newline */
-                size_t len = strlen(line);
-                while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-                    line[--len] = '\0';
-                if (len == 0) continue;
+        char append_out[600];
+        snprintf(append_out, sizeof(append_out), " -o \"%s\" -lm", output_file);
+        strncat(cmd, append_out, sizeof(cmd) - strlen(cmd) - 1);
 
-                char obj_path[1024];
-                snprintf(obj_path, sizeof(obj_path), "%s/%s/%s.o", stdlib, line, line);
-                if (access(obj_path, F_OK) == 0) {
-                    char append[1200];
-                    snprintf(append, sizeof(append), " \"%s\"", obj_path);
-                    strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
-                }
-            }
-            fclose(f);
-
-            char append_out[600];
-            snprintf(append_out, sizeof(append_out), " -o \"%s\"", output_file);
-            strncat(cmd, append_out, sizeof(cmd) - strlen(cmd) - 1);
-
-            /* Link */
-            int ret = system(cmd);
-            if (ret != 0) {
-                fprintf(stderr, "penguinc: linking failed (exit code %d)\n", ret);
-            }
+        /* Link */
+        int ret = system(cmd);
+        if (ret != 0) {
+            fprintf(stderr, "penguinc: linking failed (exit code %d)\n", ret);
         }
     }
 
     free(src);
+    for (size_t i = 0; i < links.count; i++)
+        free(links.paths[i]);
+    free(links.paths);
     return 0;
 }

@@ -35,6 +35,7 @@ typedef enum {
     TOK_ARROW, TOK_DOTDOT,       /* -> and .. */
     TOK_FAT_ARROW,               /* => */
     TOK_PLUS_PLUS, TOK_MINUS_MINUS, /* ++ and -- */
+    TOK_STAR_STAR,                  /* ** exponentiation */
     TOK_HASH, TOK_SEMICOLON_DEF,
     TOK_IMPORT, TOK_LINK, TOK_FUNC,
 

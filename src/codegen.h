@@ -10,6 +10,12 @@ typedef enum {
     OPT_AGGRESSIVE
 } OptLevel;
 
-int codegen(AstNode *program, const char *output_file, OptLevel opt);
+typedef struct {
+    char **paths;
+    size_t count;
+} LinkPaths;
+
+int codegen(AstNode *program, const char *output_file, OptLevel opt,
+            LinkPaths *out_links);
 
 #endif /* PENGUINC_CODEGEN_H */

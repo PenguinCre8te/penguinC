@@ -36,3 +36,11 @@ uint64_t arc_refcount(void *ptr) {
     }
     return 0;
 }
+
+char *arc_wrap_string(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char *copy = arc_alloc(len + 1);
+    memcpy(copy, s, len + 1);
+    return copy;
+}

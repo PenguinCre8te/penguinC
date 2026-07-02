@@ -168,6 +168,14 @@ static AstNode *parse_type(void) {
     char base[256];
     snprintf(base, sizeof(base), "%s", t.value);
 
+    /* dotted type: module.Type (e.g. threads.thread) */
+    if (cur_is(TOK_DOT) && peek_is(TOK_IDENT)) {
+        adv(); /* consume '.' */
+        Token part = expect(TOK_IDENT);
+        size_t len = strlen(base);
+        snprintf(base + len, sizeof(base) - len, ".%s", part.value);
+    }
+
     /* pointer suffix: type* */
     while (match(TOK_STAR)) {
         size_t len = strlen(base);
@@ -504,6 +512,7 @@ static AstNode *parse_var_decl_or_expr(void) {
     }
 
     /* Heuristic: IDENT [*...] IDENT = var decl (type name) */
+    /* Also handles module.Type IDENT = var decl (e.g. threads.thread thread = ...) */
     if (is_ident_like_type() && (peek_is(TOK_IDENT) || peek_is(TOK_STAR))) {
         AstNode *type = parse_type();
         Token name = expect(TOK_IDENT);
@@ -514,6 +523,36 @@ static AstNode *parse_var_decl_or_expr(void) {
         }
         match(TOK_SEMICOLON);
         return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0);
+    }
+
+    /* Dotted type heuristic: IDENT.IDENT IDENT = var decl (e.g. threads.thread thread) */
+    if (is_ident_like_type() && peek_is(TOK_DOT)) {
+        /* Save entire lexer state */
+        Lexer saved_lex = *P;
+
+        adv(); /* skip first ident */
+        adv(); /* skip '.' */
+        int is_dotted_type = cur_is(TOK_IDENT);
+        if (is_dotted_type) {
+            adv(); /* skip type name ident */
+            /* After module.Type, current should be IDENT (var name) or * */
+            is_dotted_type = cur_is(TOK_IDENT) || cur_is(TOK_STAR);
+        }
+
+        /* Restore lexer state */
+        *P = saved_lex;
+
+        if (is_dotted_type) {
+            AstNode *type = parse_type();
+            Token name = expect(TOK_IDENT);
+            check_var_camel_case(name.loc, name.value);
+            AstNode *init = NULL;
+            if (match(TOK_ASSIGN)) {
+                init = parse_expr();
+            }
+            match(TOK_SEMICOLON);
+            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0);
+        }
     }
 
     /* Otherwise it's an expression or assignment statement */
@@ -775,11 +814,168 @@ static AstNode *parse_header_file(const char *filepath) {
                     char *end = strchr(s, '"');
                     if (end) {
                         *end = '\0';
+                        /* Resolve link path to absolute path */
+                        char dir[1024];
+                        /* Get absolute directory of the .ph file */
+                        char abs_ph[1024];
+                        if (realpath(filepath, abs_ph)) {
+                            const char *last_slash = strrchr(abs_ph, '/');
+                            if (last_slash) {
+                                size_t dirlen = last_slash - abs_ph + 1;
+                                snprintf(dir, sizeof(dir), "%.*s", (int)dirlen, abs_ph);
+                            } else {
+                                strcpy(dir, "./");
+                            }
+                        } else {
+                            /* Fallback: use STDLIB env var */
+                            const char *stdlib = getenv("STDLIB");
+                            if (!stdlib) stdlib = "stdlib";
+                            snprintf(dir, sizeof(dir), "%s/", stdlib);
+                        }
+                        char resolved[1024];
+                        snprintf(resolved, sizeof(resolved), "%s%s", dir, s);
                         nodelist_push(&import_node->as.import.links,
-                            ast_new_link(loc, s));
+                            ast_new_link(loc, resolved));
                     }
                 }
             }
+            continue;
+        }
+
+        /* Check for class declaration: "class name {" */
+        if (strncmp(s, "class ", 6) == 0) {
+            char *cs = s + 6;
+            while (*cs == ' ' || *cs == '\t') cs++;
+            /* Extract class name */
+            char class_name[256];
+            size_t cn_len = 0;
+            while (*cs && *cs != ' ' && *cs != '\t' && *cs != '{' && cn_len < sizeof(class_name) - 1)
+                class_name[cn_len++] = *cs++;
+            class_name[cn_len] = '\0';
+
+            /* Find opening brace */
+            char *brace = strchr(cs, '{');
+            if (!brace) {
+                /* Single-line class? Skip */
+                continue;
+            }
+
+            /* Create class declaration node */
+            AstNode *class_node = ast_new_class_decl(loc, class_name, NULL);
+
+            /* Parse methods inside the class block */
+            while (fgets(line, sizeof(line), f)) {
+                char *ms = trim(line);
+                if (*ms == '\0') continue;
+                /* Check for closing brace */
+                if (*ms == '}') break;
+                /* Skip comments */
+                if (*ms == '#') continue;
+
+                /* Parse method mapping: ret_type name(args) => c_name; */
+                char *arrow = strstr(ms, "=>");
+                if (arrow) {
+                    *arrow = '\0';
+                    char *decl = trim(ms);
+                    char *c_name = trim(arrow + 2);
+                    size_t clen = strlen(c_name);
+                    if (clen > 0 && c_name[clen - 1] == ';')
+                        c_name[clen - 1] = '\0';
+                    c_name = trim(c_name);
+
+                    char *open_paren = strchr(decl, '(');
+                    if (open_paren) {
+                        *open_paren = '\0';
+                        /* Extract method name (before the paren) */
+                        char *name_end = open_paren - 1;
+                        while (name_end > decl && (*name_end == ' ' || *name_end == '\t'))
+                            name_end--;
+                        char *name_start = name_end;
+                        while (name_start > decl && *(name_start - 1) != ' ' &&
+                               *(name_start - 1) != '\t')
+                            name_start--;
+
+                        char method_name[256];
+                        size_t name_len = name_end - name_start + 1;
+                        if (name_len < sizeof(method_name)) {
+                            memcpy(method_name, name_start, name_len);
+                            method_name[name_len] = '\0';
+
+                            /* Extract return type */
+                            char ret_type[256] = "void";
+                            {
+                                size_t rt_len = name_start - decl;
+                                while (rt_len > 0 && (decl[rt_len-1] == ' ' || decl[rt_len-1] == '\t'))
+                                    rt_len--;
+                                if (rt_len < sizeof(ret_type) && rt_len > 0) {
+                                    memcpy(ret_type, decl, rt_len);
+                                    ret_type[rt_len] = '\0';
+                                }
+                            }
+
+                            /* Extract param types for mangled name */
+                            char *args_str = open_paren + 1;
+                            char *close_paren = strchr(args_str, ')');
+                            if (close_paren) *close_paren = '\0';
+
+                            char mangled[512];
+                            size_t mpos = 0;
+                            mpos += snprintf(mangled + mpos, sizeof(mangled) - mpos, "_pC%s", method_name);
+
+                            const char *param_types[32];
+                            size_t param_count = 0;
+
+                            char *arg = trim(args_str);
+                            while (*arg) {
+                                char *comma = strchr(arg, ',');
+                                if (comma) *comma = '\0';
+                                char *a = trim(arg);
+                                char *space = strchr(a, ' ');
+                                if (space) {
+                                    *space = '\0';
+                                    const char *t = a;
+                                    if (param_count < 32)
+                                        param_types[param_count++] = t;
+                                    if (strchr(a, '*'))
+                                        mangled[mpos++] = 'p';
+                                    else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0) mangled[mpos++] = 'i';
+                                    else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                                    else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
+                                    else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
+                                    else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                                    else {
+                                        size_t tlen = strlen(t);
+                                        mangled[mpos++] = 'p';
+                                        if (tlen > 0) mangled[mpos++] = t[0];
+                                    }
+                                }
+                                if (comma) { arg = comma + 1; }
+                                else break;
+                            }
+                            mangled[mpos] = '\0';
+
+                            /* Create method func_map entry */
+                            AstNode *fm = ast_new_func_map(loc, mangled, c_name);
+                            fm->as.func_map.ret_type = strdup(ret_type);
+                            fm->as.func_map.param_count = param_count;
+                            if (param_count > 0) {
+                                fm->as.func_map.param_types = malloc(param_count * sizeof(char *));
+                                for (size_t pi = 0; pi < param_count; pi++)
+                                    fm->as.func_map.param_types[pi] = strdup(param_types[pi]);
+                            }
+
+                            /* Create method declaration node */
+                            AstNode *method = ast_new_func_decl(loc, ret_type, method_name, 1);
+                            method->as.func_decl.class_name = strdup(class_name);
+                            nodelist_push(&class_node->as.class_decl.methods, method);
+
+                            /* Store func_map on the class node for later registration */
+                            nodelist_push(&class_node->as.class_decl.methods, fm);
+                        }
+                    }
+                }
+            }
+            nodelist_push(&import_node->as.import.func_maps, class_node);
             continue;
         }
 
@@ -861,7 +1057,7 @@ static AstNode *parse_header_file(const char *filepath) {
                             /* If type has *, it's a pointer → mangle as 'p' */
                             if (strchr(a, '*')) {
                                 mangled[mpos++] = 'p';
-                            } else if (strcmp(t, "int") == 0)        mangled[mpos++] = 'i';
+                            } else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0)  mangled[mpos++] = 'i';
                             else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
                             else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
                             else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
@@ -1076,12 +1272,22 @@ static AstNode *parse_additive(void) {
     return left;
 }
 
-static AstNode *parse_multiplicative(void) {
+static AstNode *parse_power(void) {
     AstNode *left = parse_unary();
+    if (cur_is(TOK_STAR_STAR)) {
+        adv();
+        AstNode *right = parse_power();  /* right-associative */
+        left = ast_new_binary(left->loc, "**", left, right);
+    }
+    return left;
+}
+
+static AstNode *parse_multiplicative(void) {
+    AstNode *left = parse_power();
     while (cur_is(TOK_STAR) || cur_is(TOK_SLASH) || cur_is(TOK_PERCENT)) {
         char *op = strdup(cur()->value);
         adv();
-        AstNode *right = parse_unary();
+        AstNode *right = parse_power();
         left = ast_new_binary(left->loc, op, left, right);
     }
     return left;
