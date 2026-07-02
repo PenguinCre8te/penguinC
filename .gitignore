@@ -1,2 +1,6 @@
 ./src/build
 *.o
+example.pc
+example
+test.pc
+test
