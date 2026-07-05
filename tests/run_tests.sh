@@ -72,7 +72,7 @@ run_test() {
     fi
 }
 
-echo "=== penguinC Test Suite ==="
+echo "=== penguinC Test ==="
 echo ""
 
 if [ $# -gt 0 ]; then
@@ -82,7 +82,7 @@ if [ $# -gt 0 ]; then
     done
 else
     # Run all tests
-    for t in $(seq 1 36); do
+    for t in $(seq 1 37); do
         run_test "$t" 2>/dev/null
     done
 fi

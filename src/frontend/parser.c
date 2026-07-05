@@ -214,19 +214,6 @@ static NodeList parse_param_list(void) {
 /* Check if '(' is followed by a keyword type token (for cast detection).
    We only match keyword types (int, void, etc.) not plain identifiers,
    because (ident) is always a grouped expression in our grammar. */
-static int looks_like_cast(void) {
-    if (!cur_is(TOK_LPAREN)) return 0;
-    Token *p = peek();
-    switch (p->type) {
-        case TOK_INT: case TOK_VOID: case TOK_STRING:
-        case TOK_BOOL: case TOK_FLOAT:
-        case TOK_IDENT:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /*  Block                                                              */
 /* ------------------------------------------------------------------ */
@@ -815,27 +802,34 @@ static AstNode *parse_header_file(const char *filepath) {
                     if (end) {
                         *end = '\0';
                         /* Resolve link path to absolute path */
-                        char dir[1024];
-                        /* Get absolute directory of the .ph file */
-                        char abs_ph[1024];
-                        if (realpath(filepath, abs_ph)) {
-                            const char *last_slash = strrchr(abs_ph, '/');
-                            if (last_slash) {
-                                size_t dirlen = last_slash - abs_ph + 1;
-                                snprintf(dir, sizeof(dir), "%.*s", (int)dirlen, abs_ph);
+                        /* If it's just a library name (no path separators or .o), pass as-is */
+                        if (strchr(s, '/') || s[0] == '.' || strcmp(s + strlen(s) - 2, ".o") == 0) {
+                            char dir[1024];
+                            /* Get absolute directory of the .ph file */
+                            char abs_ph[1024];
+                            if (realpath(filepath, abs_ph)) {
+                                const char *last_slash = strrchr(abs_ph, '/');
+                                if (last_slash) {
+                                    size_t dirlen = last_slash - abs_ph + 1;
+                                    snprintf(dir, sizeof(dir), "%.*s", (int)dirlen, abs_ph);
+                                } else {
+                                    strcpy(dir, "./");
+                                }
                             } else {
-                                strcpy(dir, "./");
+                                /* Fallback: use STDLIB env var */
+                                const char *stdlib = getenv("STDLIB");
+                                if (!stdlib) stdlib = "stdlib";
+                                snprintf(dir, sizeof(dir), "%s/", stdlib);
                             }
+                            char resolved[1024];
+                            snprintf(resolved, sizeof(resolved), "%s%s", dir, s);
+                            nodelist_push(&import_node->as.import.links,
+                                ast_new_link(loc, resolved));
                         } else {
-                            /* Fallback: use STDLIB env var */
-                            const char *stdlib = getenv("STDLIB");
-                            if (!stdlib) stdlib = "stdlib";
-                            snprintf(dir, sizeof(dir), "%s/", stdlib);
+                            /* Library name like "libc" — pass as-is for -l linking */
+                            nodelist_push(&import_node->as.import.links,
+                                ast_new_link(loc, s));
                         }
-                        char resolved[1024];
-                        snprintf(resolved, sizeof(resolved), "%s%s", dir, s);
-                        nodelist_push(&import_node->as.import.links,
-                            ast_new_link(loc, resolved));
                     }
                 }
             }
@@ -1484,24 +1478,6 @@ static AstNode *parse_primary(void) {
         }
 
         case TOK_LPAREN: {
-            /* Check if this looks like a cast: (type)expr */
-            if (looks_like_cast()) {
-                adv(); /* consume '(' */
-                /* Parse the type name (could be multi-word like "long int") */
-                SrcLoc cast_loc = cur()->loc;
-                /* Build type name from tokens */
-                Token first = *cur();
-                adv();
-                char type_buf[256];
-                snprintf(type_buf, sizeof(type_buf), "%s", first.value);
-                /* Handle pointer types: (int *) */
-                while (match(TOK_STAR)) {
-                    strncat(type_buf, "*", sizeof(type_buf) - strlen(type_buf) - 1);
-                }
-                expect(TOK_RPAREN);
-                AstNode *operand = parse_unary();
-                return ast_new_cast(cast_loc, type_buf, operand);
-            }
             /* Grouped expression */
             adv();
             AstNode *expr = parse_expr();

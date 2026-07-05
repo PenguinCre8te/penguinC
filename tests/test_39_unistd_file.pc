@@ -1,0 +1,19 @@
+#import std.unistd;
+#import std.io;
+
+int main() {
+    if unistd.access("/bin/sh", unistd.X_OK) == 0 {
+        io.println("executable")
+    }
+    if unistd.access("/etc/hostname", unistd.R_OK) == 0 {
+        io.println("readable")
+    }
+    if unistd.access("/etc/hostname", unistd.W_OK) == -1 {
+        io.println("not_writable")
+    }
+    long sz = unistd.sysconf(unistd._SC_PAGESIZE)
+    if sz > 0 {
+        io.println("page_size_ok")
+    }
+    return 0;
+}

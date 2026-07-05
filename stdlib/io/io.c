@@ -109,3 +109,41 @@ long parse_int(const char *s) {
 double parse_float(const char *s) {
     return strtod(s, NULL);
 }
+
+char *input(void) {
+    int capacity = 16; // Start with a small buffer
+    int length = 0;
+    char *buffer = malloc(capacity * sizeof(char));
+    
+    // Check if memory allocation failed
+    if (buffer == NULL) {
+        return NULL; 
+    }
+
+    int ch;
+    // getchar() blocks until the user presses Enter
+    while ((ch = getchar()) != '\n' && ch != EOF) {
+        // If we run out of space, double the capacity
+        if (length + 1 >= capacity) {
+            capacity *= 2;
+            char *temp = realloc(buffer, capacity * sizeof(char));
+            if (temp == NULL) {
+                free(buffer); // Clean up memory on failure
+                return NULL;
+            }
+            buffer = temp;
+        }
+        buffer[length++] = (char)ch;
+    }
+
+    // Null-terminate the string
+    buffer[length] = '\0';
+
+    // If EOF was reached immediately without reading any characters
+    if (ch == EOF && length == 0) {
+        free(buffer);
+        return NULL;
+    }
+
+    return buffer;
+}

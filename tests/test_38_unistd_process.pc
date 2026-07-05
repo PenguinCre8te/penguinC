@@ -1,0 +1,15 @@
+#import std.unistd;
+#import std.io;
+
+int main() {
+    long start = unistd.getpid()
+    long ppid = unistd.getppid()
+    if ppid > 0 {
+        io.println("parent_exists")
+    }
+    unistd.usleep(100000)
+    io.println("usleep_done")
+    unistd.alarm(0)
+    io.println("alarm_cancelled")
+    return 0;
+}

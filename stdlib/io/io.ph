@@ -10,6 +10,7 @@ long print_int(int val) => io_print_int;
 long println_int(int val) => io_println_int;
 long program_exit(long code) => program_exit_c;
 long penguin_strlen(string s) => penguin_strlen;
+string input() => input;
 string str_concat(string a, string b) => penguin_str_concat;
 string int_to_string(int val) => int_to_string;
 string float_to_string(float val) => float_to_string;

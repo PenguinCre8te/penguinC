@@ -112,7 +112,15 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
         return LLVMBuildCall2(cg->builder, fn_ty, fn, (LLVMValueRef[]){left, right}, 2, "strcat");
     }
 
-    int flt = is_float_type(LLVMTypeOf(left));
+    /* Coerce int to float when the other operand is float */
+    int left_flt  = is_float_type(LLVMTypeOf(left));
+    int right_flt = is_float_type(LLVMTypeOf(right));
+    LLVMTypeRef f64 = LLVMDoubleTypeInContext(cg->ctx);
+    if (left_flt && !right_flt)
+        right = LLVMBuildSIToFP(cg->builder, right, f64, "coerce");
+    else if (!left_flt && right_flt)
+        left = LLVMBuildSIToFP(cg->builder, left, f64, "coerce");
+    int flt = left_flt || right_flt;
 
     if (strcmp(op, "+") == 0)  return flt ? LLVMBuildFAdd(cg->builder, left, right, "fadd") : LLVMBuildAdd(cg->builder, left, right, "add");
     if (strcmp(op, "-") == 0)  return flt ? LLVMBuildFSub(cg->builder, left, right, "fsub") : LLVMBuildSub(cg->builder, left, right, "sub");
@@ -132,7 +140,7 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
             LLVMInt64TypeInContext(cg->ctx), "pow.result");
     }
     if (strcmp(op, "/") == 0)  return flt ? LLVMBuildFDiv(cg->builder, left, right, "fdiv") : LLVMBuildSDiv(cg->builder, left, right, "sdiv");
-    if (strcmp(op, "%") == 0)  return LLVMBuildSRem(cg->builder, left, right, "srem");
+    if (strcmp(op, "%") == 0)  return flt ? LLVMBuildFRem(cg->builder, left, right, "frem") : LLVMBuildSRem(cg->builder, left, right, "srem");
     if (strcmp(op, "<") == 0)  return flt ? LLVMBuildFCmp(cg->builder, LLVMRealOLT, left, right, "flt") : LLVMBuildICmp(cg->builder, LLVMIntSLT, left, right, "slt");
     if (strcmp(op, ">") == 0)  return flt ? LLVMBuildFCmp(cg->builder, LLVMRealOGT, left, right, "fgt") : LLVMBuildICmp(cg->builder, LLVMIntSGT, left, right, "sgt");
     if (strcmp(op, "<=") == 0) return flt ? LLVMBuildFCmp(cg->builder, LLVMRealOLE, left, right, "fle") : LLVMBuildICmp(cg->builder, LLVMIntSLE, left, right, "sle");

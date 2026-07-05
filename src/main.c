@@ -408,9 +408,20 @@ int main(int argc, char **argv) {
         /* Link resolved import paths */
         for (size_t i = 0; i < links.count; i++) {
             const char *path = links.paths[i];
-            if (access(path, F_OK) == 0) {
+            size_t plen = strlen(path);
+            if (plen > 2 && strcmp(path + plen - 2, ".o") == 0) {
+                /* Object file — link directly if it exists */
+                if (access(path, F_OK) == 0) {
+                    char append[1200];
+                    snprintf(append, sizeof(append), " \"%s\"", path);
+                    strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
+                }
+            } else {
+                /* Library name (e.g. "libc" or "c") — pass as -l flag */
+                const char *libname = path;
+                if (strncmp(libname, "lib", 3) == 0) libname += 3;
                 char append[1200];
-                snprintf(append, sizeof(append), " \"%s\"", path);
+                snprintf(append, sizeof(append), " -l%s", libname);
                 strncat(cmd, append, sizeof(cmd) - strlen(cmd) - 1);
             }
         }
