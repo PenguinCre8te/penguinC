@@ -547,6 +547,10 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
 
     LLVMValueRef result = LLVMBuildCall2(cg->builder, callee_fn_type, callee, args,
                                           (unsigned)argc, argc > 0 ? "call" : "");
+    for (size_t i = 0; i < argc; i++) {
+        if (node->as.call.args.items[i]->type == NODE_FSTRING)
+            call_arc_release(cg, args[i]);
+    }
     if (args) free(args);
     return result;
 }
@@ -773,13 +777,16 @@ static LLVMValueRef codegen_fstring(CodegenCtx *cg, AstNode *node) {
         return LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
 
     LLVMValueRef result = NULL;
+    int result_is_heap = 0;
     AstNode *first = node->as.fstring.parts.items[0];
     if (first->type == NODE_FSTRING_PART) {
         if (first->as.fstring_part.text) {
             result = LLVMBuildGlobalStringPtr(cg->builder, first->as.fstring_part.text, "fstr");
-        } else if (first->as.fstring_part.expr) {
-            result = codegen_expr(cg, first->as.fstring_part.expr);
-            result = codegen_auto_tostring(cg, result);
+            } else if (first->as.fstring_part.expr) {
+                result = codegen_expr(cg, first->as.fstring_part.expr);
+                LLVMTypeRef prev_ty = LLVMTypeOf(result);
+                result = codegen_auto_tostring(cg, result);
+                result_is_heap = (LLVMGetTypeKind(prev_ty) != LLVMPointerTypeKind);
         }
     }
     if (!result)
@@ -788,18 +795,28 @@ static LLVMValueRef codegen_fstring(CodegenCtx *cg, AstNode *node) {
     for (size_t i = 1; i < count; i++) {
         AstNode *part = node->as.fstring.parts.items[i];
         LLVMValueRef part_val = NULL;
+        int part_is_heap = 0;
         if (part->type == NODE_FSTRING_PART) {
             if (part->as.fstring_part.text) {
                 part_val = LLVMBuildGlobalStringPtr(cg->builder, part->as.fstring_part.text, "fstr");
             } else if (part->as.fstring_part.expr) {
                 part_val = codegen_expr(cg, part->as.fstring_part.expr);
+                LLVMTypeRef prev_ty = LLVMTypeOf(part_val);
                 part_val = codegen_auto_tostring(cg, part_val);
+                part_is_heap = (LLVMGetTypeKind(prev_ty) != LLVMPointerTypeKind);
             }
         }
-        if (!part_val)
+        if (!part_val) {
             part_val = LLVMBuildGlobalStringPtr(cg->builder, "", "fstr.empty");
+            part_is_heap = 0;
+        }
+        LLVMValueRef old_result = result;
+        int old_is_heap = result_is_heap;
         result = LLVMBuildCall2(cg->builder, str_concat_ty, str_concat_fn,
             (LLVMValueRef[]){result, part_val}, 2, "fstr.cat");
+        if (old_is_heap) call_arc_release(cg, old_result);
+        if (part_is_heap) call_arc_release(cg, part_val);
+        result_is_heap = 1;
     }
 
     return result;

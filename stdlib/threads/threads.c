@@ -46,7 +46,9 @@ long thread_get(long handle) {
     thread_handle *h = (thread_handle *)handle;
     if (h) {
         pthread_join(h->thread, NULL);
-        return h->result;
+        long result = h->result;
+        free(h);
+        return result;
     }
     return 0;
 }
