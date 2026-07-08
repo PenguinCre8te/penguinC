@@ -27,7 +27,7 @@ typedef struct {
     size_t fn_type_count;
     size_t fn_type_cap;
 
-    struct { char *name; LLVMValueRef val; LLVMTypeRef ty; LLVMTypeRef elem_ty; char *struct_name; char *type_name; int needs_release; } *vars;
+    struct { char *name; LLVMValueRef val; LLVMTypeRef ty; LLVMTypeRef elem_ty; char *struct_name; char *type_name; int needs_release; int is_shared; } *vars;
     size_t var_count;
     size_t var_cap;
 
@@ -86,6 +86,7 @@ void var_set_struct_name(CodegenCtx *cg, const char *name, const char *struct_na
 const char *var_lookup_struct_name(CodegenCtx *cg, const char *name);
 void var_set_type_name(CodegenCtx *cg, const char *name, const char *type_name);
 const char *var_lookup_type_name(CodegenCtx *cg, const char *name);
+void var_set_is_shared(CodegenCtx *cg, const char *name, int is_shared);
 void typedef_push(CodegenCtx *cg, const char *alias, const char *orig);
 const char *typedef_resolve(CodegenCtx *cg, const char *name);
 LLVMValueRef var_lookup(CodegenCtx *cg, const char *name);
@@ -118,6 +119,8 @@ LLVMValueRef get_or_declare_arc_fn(CodegenCtx *cg, const char *name, LLVMTypeRef
 LLVMValueRef call_arc_alloc(CodegenCtx *cg, LLVMValueRef size);
 LLVMValueRef call_arc_retain(CodegenCtx *cg, LLVMValueRef ptr);
 void call_arc_release(CodegenCtx *cg, LLVMValueRef ptr);
+LLVMValueRef call_arc_retain_shared(CodegenCtx *cg, LLVMValueRef ptr);
+void call_arc_release_shared(CodegenCtx *cg, LLVMValueRef ptr);
 int is_arc_type(CodegenCtx *cg, const char *type_name);
 int is_arc_type_for_var(CodegenCtx *cg, size_t var_index);
 void codegen_arc_release_var(CodegenCtx *cg, size_t var_index);

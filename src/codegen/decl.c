@@ -214,6 +214,30 @@ void codegen_program(CodegenCtx *cg, AstNode *program) {
             case NODE_TYPEDEF_DECL: codegen_typedef_decl(cg, decl); break;
             case NODE_CLASS_DECL:   codegen_class_decl(cg, decl); break;
             case NODE_IMPORT:       codegen_import(cg, decl); break;
+            case NODE_VAR_DECL: {
+                /* Register global variable */
+                const char *type_name = decl->as.var_decl.type;
+                const char *var_name = decl->as.var_decl.name;
+                LLVMTypeRef ty = resolve_type(cg, type_name);
+                LLVMValueRef global = LLVMAddGlobal(cg->module, ty, var_name);
+                /* Set initializer based on init expression if it's a constant */
+                if (decl->as.var_decl.init) {
+                    AstNode *init = decl->as.var_decl.init;
+                    if (init->type == NODE_INT_LIT) {
+                        LLVMSetInitializer(global, LLVMConstInt(ty, init->as.int_lit.value, 0));
+                    } else if (init->type == NODE_FLOAT_LIT) {
+                        LLVMSetInitializer(global, LLVMConstReal(ty, init->as.float_lit.value));
+                    } else {
+                        LLVMSetInitializer(global, LLVMConstNull(ty));
+                    }
+                } else {
+                    LLVMSetInitializer(global, LLVMConstNull(ty));
+                }
+                var_push(cg, var_name, global, ty);
+                var_set_type_name(cg, var_name, type_name);
+                var_set_is_shared(cg, var_name, decl->as.var_decl.is_shared);
+                break;
+            }
             case NODE_LINK:         break;
             default:                break;
         }

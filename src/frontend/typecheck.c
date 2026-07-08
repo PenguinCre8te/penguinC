@@ -107,6 +107,15 @@ static void tc_error(TCContext *tc, SrcLoc loc, const char *fmt, ...) {
     tc->error_count++;
 }
 
+static void tc_warn(TCContext *tc, SrcLoc loc, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "%s:%d:%d: warning: ", loc.filename ? loc.filename : tc->filename, loc.line, loc.col);
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Scope management                                                   */
 /* ------------------------------------------------------------------ */
@@ -557,8 +566,30 @@ static TCType tc_assign(TCContext *tc, AstNode *node) {
         }
     }
 
-    /* Note: penguinC variables are mutable by default.
-     * The 'mut' keyword is for ownership/borrowing semantics, not mutability. */
+    /* Check if variable is mutable */
+    if (node->as.assign.target->type == NODE_IDENTIFIER) {
+        const char *name = node->as.assign.target->as.ident.name;
+        int found = 0;
+        TCType vt = scope_lookup_var(tc, name, &found);
+        if (found && vt.kind != TC_TYPE_ERROR) {
+            /* Look up is_mut from scope */
+            TCScope *scope = tc->current_scope;
+            while (scope) {
+                for (size_t i = 0; i < scope->count; i++) {
+                    if (strcmp(scope->vars[i].name, name) == 0) {
+                        if (!scope->vars[i].is_mut) {
+                            tc_warn(tc, node->loc,
+                                "variable '%s' is not mutable, use 'mut %s' to declare as mutable",
+                                name, name);
+                        }
+                        goto found_var;
+                    }
+                }
+                scope = scope->parent;
+            }
+            found_var:;
+        }
+    }
 
     if (target_type.kind != TC_TYPE_ERROR && value_type.kind != TC_TYPE_ERROR &&
         target_type.kind != TC_UNKNOWN && value_type.kind != TC_UNKNOWN) {
@@ -1093,6 +1124,15 @@ static void tc_program(TCContext *tc, AstNode *program) {
             case NODE_ENUM_DECL:    tc_enum_decl(tc, decl); break;
             case NODE_TYPEDEF_DECL: tc_typedef_decl(tc, decl); break;
             case NODE_CLASS_DECL:   tc_class_decl(tc, decl); break;
+            case NODE_VAR_DECL: {
+                /* Register global variable */
+                const char *type_str = decl->as.var_decl.type;
+                const char *var_name = decl->as.var_decl.name;
+                TCType decl_type = resolve_tc_type(tc, type_str);
+                scope_add_var(tc, var_name, decl_type, decl->as.var_decl.is_mut,
+                              decl->loc.line, decl->loc.col);
+                break;
+            }
             case NODE_IMPORT:       break;
             case NODE_LINK:         break;
             default:                break;
@@ -1155,7 +1195,9 @@ int typecheck(AstNode *program, const char *filename, const char *src) {
     tc.filename = filename;
     tc.src = src;
 
+    scope_push(&tc);
     tc_program(&tc, program);
+    scope_pop(&tc);
 
     if (tc.error_count > 0) {
         fprintf(stderr, "penguinc: %d type error(s) found\n", tc.error_count);

@@ -19,7 +19,7 @@ typedef enum {
     TOK_STRUCT, TOK_CLASS, TOK_EXTENDS,
     TOK_IF, TOK_ELSE, TOK_SWITCH, TOK_CASE, TOK_MATCH,
     TOK_FOR, TOK_WHILE, TOK_RETURN, TOK_IN,
-    TOK_MUT, TOK_BORROW, TOK_LOCK, TOK_USING, TOK_UNSAFE,
+    TOK_MUT, TOK_SHARED, TOK_BORROW, TOK_LOCK, TOK_USING, TOK_UNSAFE,
     TOK_NEW, TOK_SELF, TOK_SUPER, TOK_SIZEOF,
     TOK_TRUE, TOK_FALSE,
 
@@ -217,7 +217,7 @@ struct AstNode {
         struct { AstNode *body; } unsafe_stmt;
 
         /* NODE_VAR_DECL */
-        struct { char *type; char *name; AstNode *init; int is_mut; } var_decl;
+        struct { char *type; char *name; AstNode *init; int is_mut; int is_shared; } var_decl;
 
         /* NODE_ASSIGN */
         struct { AstNode *target; AstNode *value; char *op; } assign;
@@ -341,7 +341,7 @@ AstNode *ast_new_for(SrcLoc loc, const char *var, AstNode *iter, AstNode *body);
 AstNode *ast_new_while(SrcLoc loc, AstNode *cond, AstNode *body);
 AstNode *ast_new_using(SrcLoc loc, AstNode *resource, AstNode *body);
 AstNode *ast_new_unsafe(SrcLoc loc, AstNode *body);
-AstNode *ast_new_var_decl(SrcLoc loc, const char *type, const char *name, AstNode *init, int is_mut);
+AstNode *ast_new_var_decl(SrcLoc loc, const char *type, const char *name, AstNode *init, int is_mut, int is_shared);
 AstNode *ast_new_assign(SrcLoc loc, AstNode *target, AstNode *value, const char *op);
 AstNode *ast_new_binary(SrcLoc loc, const char *op, AstNode *left, AstNode *right);
 AstNode *ast_new_unary(SrcLoc loc, const char *op, AstNode *operand, int is_prefix);

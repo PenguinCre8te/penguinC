@@ -182,12 +182,13 @@ AstNode *ast_new_unsafe(SrcLoc loc, AstNode *body) {
     return n;
 }
 
-AstNode *ast_new_var_decl(SrcLoc loc, const char *type, const char *name, AstNode *init, int is_mut) {
+AstNode *ast_new_var_decl(SrcLoc loc, const char *type, const char *name, AstNode *init, int is_mut, int is_shared) {
     AstNode *n = ast_new(NODE_VAR_DECL, loc);
     n->as.var_decl.type   = dup_str(type);
     n->as.var_decl.name   = dup_str(name);
     n->as.var_decl.init   = init;
     n->as.var_decl.is_mut = is_mut;
+    n->as.var_decl.is_shared = is_shared;
     return n;
 }
 

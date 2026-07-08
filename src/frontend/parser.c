@@ -355,10 +355,11 @@ static AstNode *parse_for_c_style(SrcLoc loc) {
     /* init: can be var decl, expression, or empty */
     AstNode *init = NULL;
     if (!cur_is(TOK_SEMICOLON)) {
-        /* Check if this looks like a var decl: type name or mut type name */
-        if (cur_is(TOK_MUT) || is_ident_like_type()) {
+        /* Check if this looks like a var decl: type name or [shared] [mut] type name */
+        if (cur_is(TOK_SHARED) || cur_is(TOK_MUT) || is_ident_like_type()) {
             /* Try to parse as var decl */
             SrcLoc init_loc = cur()->loc;
+            int is_shared = match(TOK_SHARED);
             int is_mut = match(TOK_MUT);
             if (is_ident_like_type()) {
                 AstNode *type = parse_type();
@@ -367,9 +368,9 @@ static AstNode *parse_for_c_style(SrcLoc loc) {
                 if (match(TOK_ASSIGN)) {
                     init_val = parse_expr();
                 }
-                init = ast_new_var_decl(init_loc, type->as.ident.name, name.value, init_val, is_mut);
+                init = ast_new_var_decl(init_loc, type->as.ident.name, name.value, init_val, is_mut, is_shared);
             } else {
-                /* mut but not followed by type - treat as expression */
+                /* mut/shared but not followed by type - treat as expression */
                 init = parse_expr();
             }
         } else {
@@ -472,9 +473,10 @@ static AstNode *parse_var_decl_or_expr(void) {
         return ast_new_typedef_decl(loc, type->as.ident.name, name.value);
     }
 
-    /* mut type name = init; */
-    if (cur_is(TOK_MUT)) {
-        adv();
+    /* [shared] [mut] type name = init; */
+    if (cur_is(TOK_SHARED) || cur_is(TOK_MUT)) {
+        int is_shared = match(TOK_SHARED);
+        int is_mut = match(TOK_MUT);
         AstNode *type = parse_type();
         Token name = expect(TOK_IDENT);
         check_var_camel_case(name.loc, name.value);
@@ -483,7 +485,7 @@ static AstNode *parse_var_decl_or_expr(void) {
             init = parse_expr();
         }
         match(TOK_SEMICOLON);
-        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 1);
+        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, is_mut, is_shared);
     }
 
     /* borrow [mut] name = expr; */
@@ -495,7 +497,7 @@ static AstNode *parse_var_decl_or_expr(void) {
         AstNode *init = parse_expr();
         match(TOK_SEMICOLON);
         return ast_new_var_decl(loc, is_mut ? "borrow mut" : "borrow",
-                                name.value, init, is_mut);
+                                name.value, init, is_mut, 0);
     }
 
     /* Heuristic: IDENT [*...] IDENT = var decl (type name) */
@@ -509,7 +511,7 @@ static AstNode *parse_var_decl_or_expr(void) {
             init = parse_expr();
         }
         match(TOK_SEMICOLON);
-        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0);
+        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0, 0);
     }
 
     /* Dotted type heuristic: IDENT.IDENT IDENT = var decl (e.g. threads.thread thread) */
@@ -538,7 +540,7 @@ static AstNode *parse_var_decl_or_expr(void) {
                 init = parse_expr();
             }
             match(TOK_SEMICOLON);
-            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0);
+            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0, 0);
         }
     }
 
@@ -613,7 +615,7 @@ static AstNode *parse_struct_decl(void) {
         Token field = expect(TOK_IDENT);
         match(TOK_SEMICOLON);
         AstNode *field_node = ast_new_var_decl(type->loc,
-            type->as.ident.name, field.value, NULL, 0);
+            type->as.ident.name, field.value, NULL, 0, 0);
         nodelist_push(&s->as.struct_decl.fields, field_node);
     }
     expect(TOK_RBRACE);
@@ -659,7 +661,7 @@ static AstNode *parse_union_decl(void) {
         Token field = expect(TOK_IDENT);
         match(TOK_SEMICOLON);
         AstNode *field_node = ast_new_var_decl(type->loc,
-            type->as.ident.name, field.value, NULL, 0);
+            type->as.ident.name, field.value, NULL, 0, 0);
         nodelist_push(&u->as.union_decl.fields, field_node);
     }
     expect(TOK_RBRACE);
@@ -700,7 +702,7 @@ static AstNode *parse_class_decl(void) {
             } else {
                 match(TOK_SEMICOLON);
                 AstNode *field_node = ast_new_var_decl(ret_type->loc,
-                    ret_type->as.ident.name, method_name.value, NULL, 0);
+                    ret_type->as.ident.name, method_name.value, NULL, 0, 0);
                 nodelist_push(&c->as.class_decl.fields, field_node);
             }
         } else {
@@ -1154,12 +1156,47 @@ static AstNode *parse_top_level(void) {
             match(TOK_SEMICOLON);
             return ast_new_typedef_decl(loc, type->as.ident.name, name.value);
         }
+        case TOK_SHARED:
+        case TOK_MUT: {
+            /* Top-level [shared] [mut] type name = init; */
+            SrcLoc loc = cur()->loc;
+            int is_shared = match(TOK_SHARED);
+            int is_mut = match(TOK_MUT);
+            AstNode *type = parse_type();
+            Token name = expect(TOK_IDENT);
+            check_var_camel_case(name.loc, name.value);
+            AstNode *init = NULL;
+            if (match(TOK_ASSIGN)) {
+                init = parse_expr();
+            }
+            match(TOK_SEMICOLON);
+            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, is_mut, is_shared);
+        }
         default:
             /* Skip storage class modifiers at top level */
             while (cur_is(TOK_STATIC) || cur_is(TOK_EXTERN) || cur_is(TOK_INLINE)) {
                 adv();
             }
             if (is_ident_like_type()) {
+                /* Check if this is a variable declaration: type name = ... or type name; */
+                Lexer saved = *P;
+                adv(); /* type */
+                if (cur_is(TOK_IDENT)) {
+                    adv(); /* name */
+                    if (cur_is(TOK_ASSIGN) || cur_is(TOK_SEMICOLON) || cur_is(TOK_COMMA)) {
+                        *P = saved;
+                        /* Parse as top-level variable declaration */
+                        SrcLoc loc = cur()->loc;
+                        AstNode *type = parse_type();
+                        Token nm = expect(TOK_IDENT);
+                        check_var_camel_case(nm.loc, nm.value);
+                        AstNode *init = NULL;
+                        if (match(TOK_ASSIGN)) init = parse_expr();
+                        match(TOK_SEMICOLON);
+                        return ast_new_var_decl(loc, type->as.ident.name, nm.value, init, 0, 0);
+                    }
+                }
+                *P = saved;
                 return parse_func_decl(0);
             }
             error_at(cur()->loc, ERR_PARSER,

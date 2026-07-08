@@ -16,12 +16,17 @@ static void register_class_func_maps(CodegenCtx *cg, AstNode *fm, const char *mo
         const char *mn = meth->as.func_map.pc_name;
         const char *start = mn;
         if (strncmp(start, "_pC", 3) == 0) start += 3;
-        const char *name_end = start;
-        while (*name_end && *name_end != 'i' && *name_end != 'f' &&
-               *name_end != 'b' && *name_end != 's' && *name_end != 'v' &&
-               *name_end != 'p')
-            name_end++;
-        size_t nlen = name_end - start;
+        size_t nlen;
+        if (meth->as.func_map.param_count == 0) {
+            nlen = strlen(start);
+        } else {
+            const char *name_end = start;
+            while (*name_end && *name_end != 'i' && *name_end != 'f' &&
+                   *name_end != 'b' && *name_end != 's' && *name_end != 'v' &&
+                   *name_end != 'p')
+                name_end++;
+            nlen = name_end - start;
+        }
         if (nlen > 0 && nlen < 256) {
             char name_buf[256];
             memcpy(name_buf, start, nlen);

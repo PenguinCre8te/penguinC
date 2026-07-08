@@ -269,7 +269,10 @@ static LLVMValueRef codegen_assign(CodegenCtx *cg, AstNode *node) {
             size_t vi;
             if (var_lookup_index(cg, var_name, &vi) && is_arc_type_for_var(cg, vi)) {
                 LLVMValueRef old_val = LLVMBuildLoad2(cg->builder, cg->vars[vi].ty, cg->vars[vi].val, "arc.old");
-                call_arc_release(cg, old_val);
+                if (cg->vars[vi].is_shared)
+                    call_arc_release_shared(cg, old_val);
+                else
+                    call_arc_release(cg, old_val);
             }
         }
         if (node->as.assign.value->type == NODE_STRING_LIT &&

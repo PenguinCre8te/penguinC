@@ -2,11 +2,7 @@
 #import std.io;
 
 int main(){
-    int time = io.input().toI()
-    for i in 1..time {
-        float remaining = (time - i).toF()
-        io.print(f"{(remaining/3600).toI()}hours {((remaining%3600)/60).toI()}min {remaining%60}seconds \n")
-        unistd.sleep(1)
-    }
-    io.print("times up!\n")
+    mut int counter = 0;
+    for i in 1..100000000 {counter++}
+    io.print(counter)
 }

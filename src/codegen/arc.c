@@ -35,6 +35,18 @@ void call_arc_release(CodegenCtx *cg, LLVMValueRef ptr) {
     LLVMBuildCall2(cg->builder, fn_ty, fn, &ptr, 1, "");
 }
 
+LLVMValueRef call_arc_retain_shared(CodegenCtx *cg, LLVMValueRef ptr) {
+    LLVMTypeRef fn_ty = LLVMFunctionType(arc_i8ptr, (LLVMTypeRef[]){arc_i8ptr}, 1, 0);
+    LLVMValueRef fn = get_or_declare_arc_fn(cg, "arc_retain_shared", fn_ty);
+    return LLVMBuildCall2(cg->builder, fn_ty, fn, &ptr, 1, "arc.retain.shared");
+}
+
+void call_arc_release_shared(CodegenCtx *cg, LLVMValueRef ptr) {
+    LLVMTypeRef fn_ty = LLVMFunctionType(LLVMVoidTypeInContext(cg->ctx), (LLVMTypeRef[]){arc_i8ptr}, 1, 0);
+    LLVMValueRef fn = get_or_declare_arc_fn(cg, "arc_release_shared", fn_ty);
+    LLVMBuildCall2(cg->builder, fn_ty, fn, &ptr, 1, "");
+}
+
 int is_arc_type(CodegenCtx *cg, const char *type_name) {
     if (!type_name) return 0;
     if (strcmp(type_name, "string") == 0) return 1;
@@ -56,7 +68,10 @@ void codegen_arc_release_var(CodegenCtx *cg, size_t var_index) {
     if (LLVMGetTypeKind(cg->vars[var_index].ty) != LLVMPointerTypeKind) return;
     LLVMValueRef val = LLVMBuildLoad2(cg->builder,
         cg->vars[var_index].ty, cg->vars[var_index].val, "arc.cleanup");
-    call_arc_release(cg, val);
+    if (cg->vars[var_index].is_shared)
+        call_arc_release_shared(cg, val);
+    else
+        call_arc_release(cg, val);
 }
 
 LLVMValueRef get_malloc(CodegenCtx *cg) {

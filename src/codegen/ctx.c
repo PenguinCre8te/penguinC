@@ -68,6 +68,7 @@ void var_push(CodegenCtx *cg, const char *name, LLVMValueRef val, LLVMTypeRef ty
     cg->vars[cg->var_count].elem_ty = NULL;
     cg->vars[cg->var_count].struct_name = NULL;
     cg->vars[cg->var_count].type_name = NULL;
+    cg->vars[cg->var_count].is_shared = 0;
     cg->var_count++;
 }
 
@@ -107,9 +108,18 @@ const char *var_lookup_struct_name(CodegenCtx *cg, const char *name) {
 
 void var_set_type_name(CodegenCtx *cg, const char *name, const char *type_name) {
     for (size_t i = cg->var_count; i > 0; i--) {
-        if (strcmp(cg->vars[i - 1].name, name) == 0) {
-            if (cg->vars[i - 1].type_name) free(cg->vars[i - 1].type_name);
-            cg->vars[i - 1].type_name = strdup(type_name);
+        if (cg->vars[i-1].name && strcmp(cg->vars[i-1].name, name) == 0) {
+            free(cg->vars[i-1].type_name);
+            cg->vars[i-1].type_name = type_name ? strdup(type_name) : NULL;
+            return;
+        }
+    }
+}
+
+void var_set_is_shared(CodegenCtx *cg, const char *name, int is_shared) {
+    for (size_t i = cg->var_count; i > 0; i--) {
+        if (cg->vars[i-1].name && strcmp(cg->vars[i-1].name, name) == 0) {
+            cg->vars[i-1].is_shared = is_shared;
             return;
         }
     }

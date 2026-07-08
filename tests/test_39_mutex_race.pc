@@ -1,0 +1,26 @@
+#import std.io;
+#import std.threads;
+#import std.mutex;
+
+shared mut long counter = 0
+mut mutex.mutex m = 0
+
+long increment() {
+    for i in 0..1000000 {
+        using(m) {
+            counter = counter + 1
+        }
+    }
+    return 0
+}
+
+int main() {
+    m = mutex.create()
+    threads.thread t1 = threads.run(increment)
+    threads.thread t2 = threads.run(increment)
+    t1.get()
+    t2.get()
+    io.println_int(counter)
+    mutex.destroy(m)
+    return 0;
+}

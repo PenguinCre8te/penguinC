@@ -1,9 +1,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdatomic.h>
 
 typedef struct {
-    uint64_t refcount;
+    _Atomic uint64_t refcount;
 } ArcHeader;
 
 void *arc_alloc(size_t size) {
@@ -43,4 +44,21 @@ char *arc_wrap_string(const char *s) {
     char *copy = arc_alloc(len + 1);
     memcpy(copy, s, len + 1);
     return copy;
+}
+
+void *arc_retain_shared(void *ptr) {
+    if (ptr) {
+        ArcHeader *h = (ArcHeader *)ptr - 1;
+        atomic_fetch_add(&h->refcount, 1);
+    }
+    return ptr;
+}
+
+void arc_release_shared(void *ptr) {
+    if (ptr) {
+        ArcHeader *h = (ArcHeader *)ptr - 1;
+        if (atomic_fetch_sub(&h->refcount, 1) == 1) {
+            free(h);
+        }
+    }
 }

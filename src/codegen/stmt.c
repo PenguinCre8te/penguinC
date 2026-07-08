@@ -16,7 +16,10 @@ static void codegen_return(CodegenCtx *cg, AstNode *node) {
             const char *vn = node->as.ret.value->as.ident.name;
             size_t vi;
             if (var_lookup_index(cg, vn, &vi) && is_arc_type_for_var(cg, vi)) {
-                val = call_arc_retain(cg, val);
+                if (cg->vars[vi].is_shared)
+                    val = call_arc_retain_shared(cg, val);
+                else
+                    val = call_arc_retain(cg, val);
             }
         }
         LLVMBuildRet(cg->builder, val);
@@ -38,6 +41,7 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
         var_set_elem_type(cg, var_name, ty);
         var_set_struct_name(cg, var_name, type_name);
         var_set_type_name(cg, var_name, type_name);
+        var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
         LLVMValueRef init_val = codegen_expr(cg, node->as.var_decl.init);
         if (init_val) LLVMBuildStore(cg->builder, init_val, alloca_inst);
         return;
@@ -46,6 +50,7 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, ty, var_name);
     var_push(cg, var_name, alloca_inst, ty);
     var_set_type_name(cg, var_name, type_name);
+    var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
     if (LLVMGetTypeKind(ty) == LLVMStructTypeKind)
         var_set_struct_name(cg, var_name, type_name);
 
@@ -401,9 +406,62 @@ static void codegen_match(CodegenCtx *cg, AstNode *node) {
 
 static void codegen_using(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef resource = codegen_expr(cg, node->as.using_stmt.resource);
+    if (!resource) {
+        codegen_block(cg, node->as.using_stmt.body);
+        return;
+    }
+
+    /* Determine the type name of the resource for method dispatch */
+    const char *type_name = NULL;
+    AstNode *res = node->as.using_stmt.resource;
+    if (res->type == NODE_IDENTIFIER) {
+        type_name = var_lookup_type_name(cg, res->as.ident.name);
+    }
+
+    LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+    LLVMTypeRef void_ty = LLVMVoidTypeInContext(cg->ctx);
+
+    /* Call enter() on the resource if type info available */
+    if (type_name && strchr(type_name, '.')) {
+        const char *dot = strchr(type_name, '.');
+        size_t mod_len = dot - type_name;
+        const char *class_name = dot + 1;
+
+        /* Look up enter method */
+        char enter_key[512];
+        snprintf(enter_key, sizeof(enter_key), "%.*s.%s.enter", (int)mod_len, type_name, class_name);
+        const char *enter_c = func_map_lookup(cg, enter_key);
+
+        if (enter_c) {
+            LLVMValueRef enter_fn = LLVMGetNamedFunction(cg->module, enter_c);
+            LLVMTypeRef enter_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
+            if (!enter_fn)
+                enter_fn = get_or_declare_runtime_fn(cg, enter_c, enter_ft);
+            LLVMBuildCall2(cg->builder, enter_ft, enter_fn, &resource, 1, "");
+        }
+    }
+
+    /* Execute the body */
     codegen_block(cg, node->as.using_stmt.body);
-    if (resource && LLVMGetTypeKind(LLVMTypeOf(resource)) == LLVMPointerTypeKind) {
-        call_arc_release(cg, resource);
+
+    /* Call exit() on the resource if type info available */
+    if (type_name && strchr(type_name, '.')) {
+        const char *dot = strchr(type_name, '.');
+        size_t mod_len = dot - type_name;
+        const char *class_name = dot + 1;
+
+        /* Look up exit method */
+        char exit_key[512];
+        snprintf(exit_key, sizeof(exit_key), "%.*s.%s.exit", (int)mod_len, type_name, class_name);
+        const char *exit_c = func_map_lookup(cg, exit_key);
+
+        if (exit_c) {
+            LLVMValueRef exit_fn = LLVMGetNamedFunction(cg->module, exit_c);
+            LLVMTypeRef exit_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
+            if (!exit_fn)
+                exit_fn = get_or_declare_runtime_fn(cg, exit_c, exit_ft);
+            LLVMBuildCall2(cg->builder, exit_ft, exit_fn, &resource, 1, "");
+        }
     }
 }
 

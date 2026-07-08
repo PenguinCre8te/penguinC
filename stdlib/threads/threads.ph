@@ -5,5 +5,5 @@ class thread {
     long get() => thread_get;
 }
 
-long run(long fn) => thread_run1;
-long run(long fn, long arg) => thread_run;
+thread run(long fn) => thread_run1;
+thread run(long fn, long arg) => thread_run;

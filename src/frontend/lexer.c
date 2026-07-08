@@ -81,6 +81,7 @@ static const Keyword keywords[] = {
     {"return",   TOK_RETURN},
     {"mut",      TOK_MUT},
     {"mutable",  TOK_MUT},
+    {"shared",   TOK_SHARED},
     {"borrow",   TOK_BORROW},
     {"lock",     TOK_LOCK},
     {"using",    TOK_USING},
@@ -438,6 +439,7 @@ const char *token_type_name(TokenType type) {
         case TOK_RETURN:       return "'return'";
         case TOK_IN:           return "'in'";
         case TOK_MUT:          return "'mut'";
+        case TOK_SHARED:       return "'shared'";
         case TOK_BORROW:       return "'borrow'";
         case TOK_LOCK:         return "'lock'";
         case TOK_USING:        return "'using'";
