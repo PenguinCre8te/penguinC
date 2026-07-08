@@ -31,9 +31,9 @@ src/build/codegen/%.o: src/codegen/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-stdlib: $(STDLIB)/io/io.o $(STDLIB)/threads/threads.o $(STDLIB)/mutex/mutex.o runtime/arc.o
+stdlib: $(STDLIB)/console/console.o $(STDLIB)/threads/threads.o $(STDLIB)/mutex/mutex.o $(STDLIB)/files/files.o runtime/arc.o
 
-$(STDLIB)/io/io.o: $(STDLIB)/io/io.c runtime/arc.c
+$(STDLIB)/console/console.o: $(STDLIB)/console/console.c runtime/arc.c
 	$(CC) -Wall -Wextra -std=c11 -g -Iruntime -c -o $@ $<
 
 $(STDLIB)/threads/threads.o: $(STDLIB)/threads/threads.c
@@ -42,11 +42,15 @@ $(STDLIB)/threads/threads.o: $(STDLIB)/threads/threads.c
 $(STDLIB)/mutex/mutex.o: $(STDLIB)/mutex/mutex.c
 	$(CC) -Wall -Wextra -std=c11 -g -c -o $@ $< -lpthread
 
+$(STDLIB)/files/files.o: $(STDLIB)/files/files.c
+	$(CC) -Wall -Wextra -std=c11 -g -c -o $@ $<
+
 runtime/arc.o: runtime/arc.c
 	$(CC) -Wall -Wextra -std=c11 -g -c -o $@ $<
 
 test: $(BIN) stdlib
 	@./tests/run_tests.sh
+	@./tests/run_errors.sh
 
 test-errors: $(BIN) stdlib
 	@./tests/run_errors.sh
@@ -55,6 +59,6 @@ test-%: $(BIN) stdlib
 	@./tests/run_tests.sh $*
 
 clean:
-	rm -rf src/build $(BIN) $(STDLIB)/io/*.o $(STDLIB)/threads/*.o $(STDLIB)/mutex/*.o runtime/*.o
+	rm -rf src/build $(BIN) $(STDLIB)/console/*.o $(STDLIB)/threads/*.o $(STDLIB)/mutex/*.o $(STDLIB)/files/*.o runtime/*.o
 
 .PHONY: all clean test test-errors stdlib

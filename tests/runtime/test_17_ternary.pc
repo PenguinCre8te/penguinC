@@ -1,10 +1,10 @@
-#import std.io;
+#import std.console;
 int main() {
     int x = 10;
     int result = x > 5 ? 1 : 0;
-    io.println_int(result);
+    console.println_int(result);
     int y = 3;
     int result2 = y > 5 ? 1 : 0;
-    io.println_int(result2);
+    console.println_int(result2);
     return 0;
 }

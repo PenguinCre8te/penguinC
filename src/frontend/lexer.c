@@ -111,6 +111,7 @@ static const Keyword keywords[] = {
     {"continue", TOK_CONTINUE},
     {"default",  TOK_DEFAULT},
     {"do",       TOK_DO},
+    {"as",       TOK_AS},
     {"NULL",     TOK_NULL_LIT},
     {NULL, 0},
 };
@@ -505,6 +506,7 @@ const char *token_type_name(TokenType type) {
         case TOK_CONTINUE:     return "'continue'";
         case TOK_DEFAULT:      return "'default'";
         case TOK_DO:           return "'do'";
+        case TOK_AS:           return "'as'";
         case TOK_NULL_LIT:     return "'NULL'";
         case TOK_QUESTION:     return "'?'";
         case TOK_EOF:          return "end of file";

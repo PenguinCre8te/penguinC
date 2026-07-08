@@ -1,8 +1,17 @@
-#import std.unistd;
-#import std.io;
+#import std.console
+#import std.files
 
-int main(){
-    mut int counter = 0;
-    for i in 1..100000000 {counter++}
-    io.print(counter)
+// long main() {
+//     mut long f = files.open("./test.txt", 1)
+//     console.println(f.toS())
+//     long n = files.file.writeStr(f, "hello")
+//     console.println(n.toS())
+//     files.file.flush(f)
+//     files.file.exit(f)
+// }
+
+long main() {
+    using(files.open("./test.txt", 1) as f) {
+        f.write("penguin")
+    }
 }

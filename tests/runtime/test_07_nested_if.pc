@@ -1,15 +1,15 @@
-#import std.io;
+#import std.console;
 int main() {
     int x = 10;
     if x == 10 {
-        io.print("ten\n");
+        console.print("ten\n");
     } else {
-        io.print("not ten\n");
+        console.print("not ten\n");
     }
     if x > 20 {
-        io.print("big\n");
+        console.print("big\n");
     } else {
-        io.print("small\n");
+        console.print("small\n");
     }
     return 0;
 }

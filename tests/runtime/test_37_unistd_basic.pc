@@ -1,12 +1,12 @@
 #import std.unistd;
-#import std.io;
+#import std.console;
 
 int main() {
     long rem = unistd.sleep(0)
     if rem == 0 {
-        io.println("sleep_zero")
+        console.println("sleep_zero")
     }
     unistd.usleep(0)
-    io.println("usleep_ok")
+    console.println("usleep_ok")
     return 0;
 }

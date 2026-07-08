@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 #import threads;
 
 int add_one() {
@@ -20,5 +20,5 @@ int main() {
     long r1 = t1.get();
     long r2 = t2.get();
     long r3 = t3.get();
-    io.print(f"{r1} {r2} {r3}\n");
+    console.print(f"{r1} {r2} {r3}\n");
 }

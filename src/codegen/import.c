@@ -20,11 +20,24 @@ static void register_class_func_maps(CodegenCtx *cg, AstNode *fm, const char *mo
         if (meth->as.func_map.param_count == 0) {
             nlen = strlen(start);
         } else {
+            /* Find the end of the base name: stop at a type-suffix char
+               ONLY if the next char is NOT an identifier char (letter/digit/underscore).
+               This prevents truncating names like "writeStr" at the 'i' in "write". */
             const char *name_end = start;
-            while (*name_end && *name_end != 'i' && *name_end != 'f' &&
-                   *name_end != 'b' && *name_end != 's' && *name_end != 'v' &&
-                   *name_end != 'p')
+            while (*name_end) {
+                char c = *name_end;
+                int is_suffix = (c == 'i' || c == 'f' || c == 'b' || c == 's' || c == 'v' || c == 'p');
+                if (is_suffix) {
+                    /* Check if next char is identifier char — if so, this is part of the name */
+                    char next = name_end[1];
+                    if (next == '\0' || (!(next >= 'a' && next <= 'z') &&
+                                         !(next >= 'A' && next <= 'Z') &&
+                                         !(next >= '0' && next <= '9') &&
+                                         next != '_'))
+                        break; /* real suffix */
+                }
                 name_end++;
+            }
             nlen = name_end - start;
         }
         if (nlen > 0 && nlen < 256) {
@@ -34,6 +47,14 @@ static void register_class_func_maps(CodegenCtx *cg, AstNode *fm, const char *mo
             snprintf(simple, sizeof(simple), "%s.%s.%s", mod_name,
                      fm->as.class_decl.name, name_buf);
             func_map_push(cg, simple, meth->as.func_map.c_name);
+        }
+
+        /* Also register using the original (unmangled) method name */
+        if (meth->as.func_map.orig_name) {
+            char orig_key[512];
+            snprintf(orig_key, sizeof(orig_key), "%s.%s.%s", mod_name,
+                     fm->as.class_decl.name, meth->as.func_map.orig_name);
+            func_map_push(cg, orig_key, meth->as.func_map.c_name);
         }
 
         if (meth->as.func_map.ret_type) {
@@ -60,10 +81,19 @@ static void register_func_map(CodegenCtx *cg, AstNode *fm, const char *mod_name)
         const char *start = mn;
         if (strncmp(start, "_pC", 3) == 0) start += 3;
         const char *name_end = start;
-        while (*name_end && *name_end != 'i' && *name_end != 'f' &&
-               *name_end != 'b' && *name_end != 's' && *name_end != 'v' &&
-               *name_end != 'p')
+        while (*name_end) {
+            char c = *name_end;
+            int is_suffix = (c == 'i' || c == 'f' || c == 'b' || c == 's' || c == 'v' || c == 'p');
+            if (is_suffix) {
+                char next = name_end[1];
+                if (next == '\0' || (!(next >= 'a' && next <= 'z') &&
+                                     !(next >= 'A' && next <= 'Z') &&
+                                     !(next >= '0' && next <= '9') &&
+                                     next != '_'))
+                    break;
+            }
             name_end++;
+        }
         size_t nlen = name_end - start;
         if (nlen > 0 && nlen < 256) {
             char name_buf[256];

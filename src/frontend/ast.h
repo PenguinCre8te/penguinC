@@ -56,6 +56,7 @@ typedef enum {
     TOK_DO,
     TOK_NULL_LIT,
     TOK_QUESTION,
+    TOK_AS,
 
     /* Special */
     TOK_EOF,
@@ -166,7 +167,7 @@ struct AstNode {
         struct { char *path; } link;
 
         /* NODE_FUNC_MAP */
-        struct { char *pc_name; char *c_name; char *ret_type; char **param_types; size_t param_count; } func_map;
+        struct { char *pc_name; char *c_name; char *ret_type; char **param_types; size_t param_count; char *orig_name; } func_map;
 
         /* NODE_STRUCT_DECL */
         struct { char *name; NodeList fields; } struct_decl;
@@ -211,7 +212,7 @@ struct AstNode {
         struct { AstNode *cond; AstNode *body; } while_stmt;
 
         /* NODE_USING */
-        struct { AstNode *resource; AstNode *body; } using_stmt;
+        struct { AstNode *resource; AstNode *body; char *var_name; } using_stmt;
 
         /* NODE_UNSAFE */
         struct { AstNode *body; } unsafe_stmt;
@@ -339,7 +340,7 @@ AstNode *ast_new_match(SrcLoc loc, AstNode *expr);
 AstNode *ast_new_match_case(SrcLoc loc, AstNode *pattern, AstNode *body, int is_default);
 AstNode *ast_new_for(SrcLoc loc, const char *var, AstNode *iter, AstNode *body);
 AstNode *ast_new_while(SrcLoc loc, AstNode *cond, AstNode *body);
-AstNode *ast_new_using(SrcLoc loc, AstNode *resource, AstNode *body);
+AstNode *ast_new_using(SrcLoc loc, AstNode *resource, AstNode *body, const char *var_name);
 AstNode *ast_new_unsafe(SrcLoc loc, AstNode *body);
 AstNode *ast_new_var_decl(SrcLoc loc, const char *type, const char *name, AstNode *init, int is_mut, int is_shared);
 AstNode *ast_new_assign(SrcLoc loc, AstNode *target, AstNode *value, const char *op);

@@ -1,12 +1,12 @@
 #import std.mutex;
-#import std.io;
+#import std.console;
 
 int main() {
     long m = mutex.create()
     using(m) {
-        io.println("inside_using")
+        console.println("inside_using")
     }
-    io.println("after_using")
+    console.println("after_using")
     mutex.destroy(m)
     return 0;
 }

@@ -1,7 +1,7 @@
-#import std.io;
+#import std.console;
 int main() {
     int* p = new int(0);
     *p = 42;
-    io.println_int(*p);
+    console.println_int(*p);
     return 0;
 }

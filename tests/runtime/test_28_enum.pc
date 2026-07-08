@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 enum Color {
     RED,
     GREEN,
@@ -7,8 +7,8 @@ enum Color {
 
 int main() {
     mut int c = RED;
-    io.println_int(c);
+    console.println_int(c);
     c = BLUE;
-    io.println_int(c);
+    console.println_int(c);
     return 0;
 }

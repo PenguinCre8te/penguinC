@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 int factorial(int n) {
     if n <= 1 {
         return 1;
@@ -7,9 +7,9 @@ int factorial(int n) {
 }
 
 int main() {
-    io.print_int(factorial(5));
-    io.print("\n");
-    io.print_int(factorial(10));
-    io.print("\n");
+    console.print_int(factorial(5));
+    console.print("\n");
+    console.print_int(factorial(10));
+    console.print("\n");
     return 0;
 }

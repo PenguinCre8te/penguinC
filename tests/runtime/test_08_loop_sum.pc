@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int i = 0;
     mut int sum = 0;
@@ -6,7 +6,7 @@ int main() {
         sum += i;
         i += 1;
     }
-    io.print_int(sum);
-    io.print("\n");
+    console.print_int(sum);
+    console.print("\n");
     return 0;
 }

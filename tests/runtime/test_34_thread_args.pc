@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 #import threads;
 
 int double_it(long n) {
@@ -10,5 +10,5 @@ int main() {
     threads.thread t2 = threads.run(double_it, 20);
     long r1 = t1.get();
     long r2 = t2.get();
-    io.print(f"{r1} {r2}\n");
+    console.print(f"{r1} {r2}\n");
 }

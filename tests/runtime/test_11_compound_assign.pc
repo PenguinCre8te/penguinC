@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int i = 5;
     mut int result = 0;
@@ -6,7 +6,7 @@ int main() {
         result += i * 2;
         i -= 1;
     }
-    io.print_int(result);
-    io.print("\n");
+    console.print_int(result);
+    console.print("\n");
     return 0;
 }

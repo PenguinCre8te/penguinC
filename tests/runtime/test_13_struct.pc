@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 struct Point {
     int x;
     int y;
@@ -6,13 +6,13 @@ struct Point {
 
 int main() {
     mut Point p = {10, 20};
-    io.print_int(p.x);
-    io.print(" ");
-    io.println_int(p.y);
+    console.print_int(p.x);
+    console.print(" ");
+    console.println_int(p.y);
     p.x = 30;
     p.y = 40;
-    io.print_int(p.x);
-    io.print(" ");
-    io.println_int(p.y);
+    console.print_int(p.x);
+    console.print(" ");
+    console.println_int(p.y);
     return 0;
 }

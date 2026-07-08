@@ -1,0 +1,11 @@
+#import std.console
+#import std.mutex
+
+long main() {
+    mut long x = 0
+    using(mutex.create() as m) {
+        x = 42
+    }
+    console.println(x.toS())
+    "42"
+}

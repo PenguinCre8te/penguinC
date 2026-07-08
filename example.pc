@@ -1,5 +1,5 @@
 // Example for penguinC
-#import std.io;
+#import std.console;
 #import std.sync;
 #import std.thread;
 #import std.mem;
@@ -43,12 +43,12 @@ struct DeviceData {
 // Compiler ensures device and serviceLock are valid for the scope of the using block
 void logDeviceStatus(borrow DeviceData device, lock serviceLock) {
     using(serviceLock) { //handles RAII
-        io.print("Device Status Check: " + device.deviceId);
+        console.print("Device Status Check: " + device.deviceId);
     }
 }
 
 int main() {
-    io.print("--- Initializing penguinC System ---");
+    console.print("--- Initializing penguinC System ---");
 
     lock serviceLock = new lock();
     mut DeviceData myCounter = {"PENGUIN-001", 0};
@@ -62,19 +62,19 @@ int main() {
     // --- Switch/Match logic ---
     int result = 50; 
     switch (result) {
-        case 1 { io.print("Success") }
-        case 2 { io.print("2") }
-        case * { io.print("wtf") }
+        case 1 { console.print("Success") }
+        case 2 { console.print("2") }
+        case * { console.print("wtf") }
     }
     
     match (result) {
-        case result in 0..50 { io.print("Process completed with minor latency."); }
-        case result > 50 { io.print("Process completed successfully."); }
-        case * { io.print("Unknown error state encountered."); }
+        case result in 0..50 { console.print("Process completed with minor latency."); }
+        case result > 50 { console.print("Process completed successfully."); }
+        case * { console.print("Unknown error state encountered."); }
     }
 
     if result == 1{
-        io.print("penguin")
+        console.print("penguin")
     }
 
     // --- Manual Escape Hatch ---
@@ -96,7 +96,7 @@ int main() {
 
     // Python like Loop
     for i in 0..100 {
-        io.print(f"value is: {i}"); 
+        console.print(f"value is: {i}"); 
     }
     
     // Managed Heap String

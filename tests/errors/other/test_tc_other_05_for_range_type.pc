@@ -1,7 +1,7 @@
-#import std.io;
+#import std.console;
 int main() {
     for i in 0.."hello" {
-        io.println_int(i);
+        console.println_int(i);
     }
     return 0;
 }

@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 #import std.mutex;
 
 shared mut long counter = 0

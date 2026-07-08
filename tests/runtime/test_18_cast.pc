@@ -1,9 +1,9 @@
-#import std.io;
+#import std.console;
 int main() {
     float pi = 3.14;
     int truncated = pi.toI();
-    io.println_int(truncated);
+    console.println_int(truncated);
     long fromFloat = 7.9.toI();
-    io.println_int(fromFloat);
+    console.println_int(fromFloat);
     return 0;
 }

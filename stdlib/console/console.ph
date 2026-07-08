@@ -1,4 +1,4 @@
-#link "./io.o";
+#link "./console.o";
 
 long print(string s) => io_print;
 long print(int val) => io_print_int;

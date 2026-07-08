@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int sum = 0;
     for i in 0..10 {
@@ -7,7 +7,7 @@ int main() {
         }
         sum += i;
     }
-    io.println_int(sum);
+    console.println_int(sum);
     mut int count = 0;
     for i in 0..10 {
         if i % 2 == 0 {
@@ -15,6 +15,6 @@ int main() {
         }
         count += 1;
     }
-    io.println_int(count);
+    console.println_int(count);
     return 0;
 }

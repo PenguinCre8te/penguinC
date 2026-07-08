@@ -655,8 +655,8 @@ static TCType tc_call(TCContext *tc, AstNode *node) {
         }
 
         TCFuncSig *any_fn = tc_func_lookup_any(tc, name);
-        if (!any_fn && strcmp(name, "io.print") != 0 &&
-            strcmp(name, "io.println") != 0 &&
+        if (!any_fn && strcmp(name, "console.print") != 0 &&
+            strcmp(name, "console.println") != 0 &&
             strcmp(name, "threads.run") != 0 &&
             strcmp(name, "threads.run1") != 0 &&
             strcmp(name, "arc_alloc") != 0 &&
@@ -974,13 +974,27 @@ static void tc_switch(TCContext *tc, AstNode *node) {
 }
 
 static void tc_using(TCContext *tc, AstNode *node) {
-    tc_expr(tc, node->as.using_stmt.resource);
+    // Typecheck the resource expression first
+    TCType resource_type = tc_expr(tc, node->as.using_stmt.resource);
+
     tc->using_depth++;
     scope_push(tc);
+
+    if (node->as.using_stmt.var_name) {
+        // Register the variable with the type of the resource
+        scope_add_var(tc,
+                      node->as.using_stmt.var_name,
+                      resource_type,
+                      1, 0,
+                      node->loc.line,
+                      node->loc.col);
+    }
+
     tc_block(tc, node->as.using_stmt.body);
     scope_pop(tc);
     tc->using_depth--;
 }
+
 
 static void tc_match(TCContext *tc, AstNode *node) {
     tc_expr(tc, node->as.match_stmt.expr);

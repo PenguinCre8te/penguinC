@@ -1,14 +1,14 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int sum = 0;
     for i in 0..5 {
         sum += i;
     }
-    io.println_int(sum);
+    console.println_int(sum);
     mut int count = 0;
     for i in 1..4 {
         count += 1;
     }
-    io.println_int(count);
+    console.println_int(count);
     return 0;
 }

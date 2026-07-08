@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 #import threads;
 
 int compute(long n) {
@@ -15,5 +15,5 @@ int main() {
     long r3 = t3.get();
     long r4 = t4.get();
     long total = r1 + r2 + r3 + r4;
-    io.print(f"total: {total}\n");
+    console.print(f"total: {total}\n");
 }

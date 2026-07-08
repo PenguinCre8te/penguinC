@@ -1,5 +1,5 @@
-#import std.io;
+#import std.console;
 int main() {
-    io.nonexistent_func(42);
+    console.nonexistent_func(42);
     return 0;
 }

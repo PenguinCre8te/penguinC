@@ -1,8 +1,8 @@
-#import std.io;
+#import std.console;
 typedef long i64;
 
 int main() {
     i64 x = 42;
-    io.println_int(x);
+    console.println_int(x);
     return 0;
 }

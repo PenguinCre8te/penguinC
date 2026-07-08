@@ -1,9 +1,9 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int x = 0;
     goto skip;
     x = 100;
     skip:
-    io.println_int(x);
+    console.println_int(x);
     return 0;
 }

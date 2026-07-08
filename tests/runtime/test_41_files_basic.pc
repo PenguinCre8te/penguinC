@@ -1,0 +1,13 @@
+#import std.console
+#import std.files
+
+long main() {
+    using(files.open("/tmp/penguinc_test.txt", 1) as f) {
+        files.file.writeStr(f, "hello")
+    }
+    using(files.open("/tmp/penguinc_test.txt", 0) as f2) {
+        string content = files.file.readAll(f2)
+        console.println(content)
+    }
+    "hello"
+}

@@ -439,9 +439,17 @@ static AstNode *parse_using(void) {
     adv();
     expect(TOK_LPAREN);
     AstNode *resource = parse_expr();
+
+    /* Check for 'using(expr as var) { body }' syntax */
+    const char *var_name = NULL;
+    if (match(TOK_AS)) {
+        Token var = expect(TOK_IDENT);
+        var_name = strdup(var.value);
+    }
+
     expect(TOK_RPAREN);
     AstNode *body = parse_block();
-    return ast_new_using(loc, resource, body);
+    return ast_new_using(loc, resource, body, var_name);
 }
 
 static AstNode *parse_unsafe(void) {
@@ -897,22 +905,30 @@ static AstNode *parse_header_file(const char *filepath) {
                             memcpy(method_name, name_start, name_len);
                             method_name[name_len] = '\0';
 
-                            /* Extract return type */
-                            char ret_type[256] = "void";
-                            {
-                                size_t rt_len = name_start - decl;
-                                while (rt_len > 0 && (decl[rt_len-1] == ' ' || decl[rt_len-1] == '\t'))
-                                    rt_len--;
-                                if (rt_len < sizeof(ret_type) && rt_len > 0) {
-                                    memcpy(ret_type, decl, rt_len);
-                                    ret_type[rt_len] = '\0';
-                                }
-                            }
-
                             /* Extract param types for mangled name */
                             char *args_str = open_paren + 1;
                             char *close_paren = strchr(args_str, ')');
                             if (close_paren) *close_paren = '\0';
+
+                            /* Extract return type - look for '->' after closing paren */
+                            char ret_type[256] = "void";
+                            {
+                                char *after_args = close_paren ? close_paren + 1 : args_str;
+                                char *arrow2 = strstr(after_args, "->");
+                                if (arrow2) {
+                                    char *rt_start = arrow2 + 2;
+                                    while (*rt_start == ' ' || *rt_start == '\t') rt_start++;
+                                    char *rt_end = rt_start;
+                                    while (*rt_end && *rt_end != ' ' && *rt_end != '\t' &&
+                                           *rt_end != ';' && *rt_end != '\n' && *rt_end != '\r')
+                                        rt_end++;
+                                    size_t rt_len = rt_end - rt_start;
+                                    if (rt_len > 0 && rt_len < sizeof(ret_type)) {
+                                        memcpy(ret_type, rt_start, rt_len);
+                                        ret_type[rt_len] = '\0';
+                                    }
+                                }
+                            }
 
                             char mangled[512];
                             size_t mpos = 0;
@@ -953,6 +969,7 @@ static AstNode *parse_header_file(const char *filepath) {
                             /* Create method func_map entry */
                             AstNode *fm = ast_new_func_map(loc, mangled, c_name);
                             fm->as.func_map.ret_type = strdup(ret_type);
+                            fm->as.func_map.orig_name = strdup(method_name);
                             fm->as.func_map.param_count = param_count;
                             if (param_count > 0) {
                                 fm->as.func_map.param_types = malloc(param_count * sizeof(char *));

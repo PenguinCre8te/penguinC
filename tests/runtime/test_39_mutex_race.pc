@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 #import std.threads;
 #import std.mutex;
 
@@ -20,7 +20,7 @@ int main() {
     threads.thread t2 = threads.run(increment)
     t1.get()
     t2.get()
-    io.println_int(counter)
+    console.println_int(counter)
     mutex.destroy(m)
     return 0;
 }

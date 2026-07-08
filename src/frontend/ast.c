@@ -64,6 +64,7 @@ AstNode *ast_new_func_map(SrcLoc loc, const char *pc_name, const char *c_name) {
     n->as.func_map.pc_name = dup_str(pc_name);
     n->as.func_map.c_name  = dup_str(c_name);
     n->as.func_map.ret_type = NULL;
+    n->as.func_map.orig_name = NULL;
     n->as.func_map.param_types = NULL;
     n->as.func_map.param_count = 0;
     return n;
@@ -169,10 +170,11 @@ AstNode *ast_new_while(SrcLoc loc, AstNode *cond, AstNode *body) {
     return n;
 }
 
-AstNode *ast_new_using(SrcLoc loc, AstNode *resource, AstNode *body) {
+AstNode *ast_new_using(SrcLoc loc, AstNode *resource, AstNode *body, const char *var_name) {
     AstNode *n = ast_new(NODE_USING, loc);
     n->as.using_stmt.resource = resource;
     n->as.using_stmt.body     = body;
+    n->as.using_stmt.var_name = var_name ? strdup(var_name) : NULL;
     return n;
 }
 

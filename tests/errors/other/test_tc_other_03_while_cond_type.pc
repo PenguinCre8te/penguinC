@@ -1,7 +1,7 @@
-#import std.io;
+#import std.console;
 int main() {
     while 42 {
-        io.println("loop");
+        console.println("loop");
     }
     return 0;
 }

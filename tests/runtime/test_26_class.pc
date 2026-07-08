@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 class Counter {
     int value;
 
@@ -9,8 +9,8 @@ class Counter {
 
 int main() {
     Counter c = new Counter(10);
-    io.println_int(c.value);
+    console.println_int(c.value);
     c.value += 5;
-    io.println_int(c.value);
+    console.println_int(c.value);
     return 0;
 }

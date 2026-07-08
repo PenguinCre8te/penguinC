@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 
 int main() {
     int x = 42;
@@ -7,19 +7,19 @@ int main() {
     int b = 1;
 
     string sx = x.toS();
-    io.println(sx);
+    console.println(sx);
 
     int si = s.toI();
-    io.println_int(si);
+    console.println_int(si);
 
     string fx = x.toF().toS();
-    io.println(fx);
+    console.println(fx);
 
     string sp = pi.toS();
-    io.println(sp);
+    console.println(sp);
 
     string sb = b.toB().toS();
-    io.println(sb);
+    console.println(sb);
 
     return 0;
 }

@@ -1,17 +1,17 @@
-#import std.io;
+#import std.console;
 int main() {
     int result = 25;
     match (result) {
-        case result in 0..10 { io.println("small") }
-        case result in 10..50 { io.println("medium") }
-        case result > 50 { io.println("large") }
-        case * { io.println("unknown") }
+        case result in 0..10 { console.println("small") }
+        case result in 10..50 { console.println("medium") }
+        case result > 50 { console.println("large") }
+        case * { console.println("unknown") }
     }
     int big = 75;
     match (big) {
-        case big in 0..50 { io.println("small") }
-        case big > 50 { io.println("large") }
-        case * { io.println("unknown") }
+        case big in 0..50 { console.println("small") }
+        case big > 50 { console.println("large") }
+        case * { console.println("unknown") }
     }
     return 0;
 }

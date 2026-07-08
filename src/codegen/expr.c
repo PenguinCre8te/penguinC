@@ -105,8 +105,8 @@ static LLVMValueRef codegen_binary(CodegenCtx *cg, AstNode *node) {
         LLVMGetTypeKind(LLVMTypeOf(right)) == LLVMPointerTypeKind) {
         LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
         LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
-        const char *c_name = func_map_lookup(cg, "io._pCstr_concatss");
-        if (!c_name) c_name = func_map_lookup(cg, "io.str_concat");
+        const char *c_name = func_map_lookup(cg, "console._pCstr_concatss");
+        if (!c_name) c_name = func_map_lookup(cg, "console.str_concat");
         if (!c_name) c_name = "penguin_str_concat";
         LLVMValueRef fn = get_or_declare_runtime_fn(cg, c_name, fn_ty);
         return LLVMBuildCall2(cg->builder, fn_ty, fn, (LLVMValueRef[]){left, right}, 2, "strcat");
@@ -380,6 +380,43 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
     if (node->as.call.callee->type == NODE_MEMBER) {
         AstNode *obj = node->as.call.callee->as.member.object;
         const char *member = node->as.call.callee->as.member.member;
+
+        /* Resolve module.class.method calls (nested member access like files.file.writeStr) */
+        if (obj->type == NODE_MEMBER &&
+            obj->as.member.object->type == NODE_IDENTIFIER &&
+            obj->as.member.object->as.ident.name) {
+            const char *mod_name = obj->as.member.object->as.ident.name;
+            const char *class_name = obj->as.member.member;
+
+            char qualified[512];
+            snprintf(qualified, sizeof(qualified), "%s.%s.%s", mod_name, class_name, member);
+            const char *c_name = func_map_lookup(cg, qualified);
+
+            if (c_name) {
+                LLVMValueRef callee_fn = LLVMGetNamedFunction(cg->module, c_name);
+                LLVMTypeRef callee_ft = fn_type_lookup(cg, c_name);
+                if (!callee_fn) {
+                    if (!callee_ft) {
+                        size_t ac = node->as.call.args.count;
+                        LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+                        LLVMTypeRef *argt = malloc(ac * sizeof(LLVMTypeRef));
+                        for (size_t i = 0; i < ac; i++) argt[i] = i64_ty;
+                        callee_ft = LLVMFunctionType(i64_ty, argt, (unsigned)ac, 0);
+                        free(argt);
+                    }
+                    callee_fn = get_or_declare_runtime_fn(cg, c_name, callee_ft);
+                }
+                size_t user_argc = node->as.call.args.count;
+                LLVMValueRef *args = user_argc > 0 ? malloc(user_argc * sizeof(LLVMValueRef)) : NULL;
+                for (size_t i = 0; i < user_argc; i++)
+                    args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+                LLVMValueRef result = LLVMBuildCall2(cg->builder, callee_ft, callee_fn,
+                                                     args ? args : NULL, (unsigned)user_argc, "call");
+                if (args) free(args);
+                return result;
+            }
+        }
+
         if (obj->type == NODE_IDENTIFIER) {
             const char *type_name = var_lookup_type_name(cg, obj->as.ident.name);
             if (type_name && strchr(type_name, '.')) {
@@ -770,7 +807,7 @@ static LLVMValueRef codegen_fstring(CodegenCtx *cg, AstNode *node) {
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
     LLVMTypeRef str_concat_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr}, 2, 0);
     LLVMValueRef str_concat_fn = get_or_declare_runtime_fn(cg,
-        func_map_lookup(cg, "io.str_concat") ? func_map_lookup(cg, "io.str_concat") : "penguin_str_concat",
+        func_map_lookup(cg, "console.str_concat") ? func_map_lookup(cg, "console.str_concat") : "penguin_str_concat",
         str_concat_ty);
 
     size_t count = node->as.fstring.parts.count;

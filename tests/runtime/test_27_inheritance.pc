@@ -1,4 +1,4 @@
-#import std.io;
+#import std.console;
 class Base {
     int id;
 
@@ -18,8 +18,8 @@ class Derived extends Base {
 
 int main() {
     Derived d = new Derived(1, 2);
-    io.print_int(d.id);
-    io.print(" ");
-    io.println_int(d.extra);
+    console.print_int(d.id);
+    console.print(" ");
+    console.println_int(d.extra);
     return 0;
 }

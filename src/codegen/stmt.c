@@ -421,13 +421,19 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
     LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
     LLVMTypeRef void_ty = LLVMVoidTypeInContext(cg->ctx);
 
+    /* If var_name is set, store the resource handle in a named variable */
+    if (node->as.using_stmt.var_name) {
+        LLVMValueRef alloca = LLVMBuildAlloca(cg->builder, i64_ty, node->as.using_stmt.var_name);
+        LLVMBuildStore(cg->builder, resource, alloca);
+        var_push(cg, node->as.using_stmt.var_name, alloca, i64_ty);
+    }
+
     /* Call enter() on the resource if type info available */
     if (type_name && strchr(type_name, '.')) {
         const char *dot = strchr(type_name, '.');
         size_t mod_len = dot - type_name;
         const char *class_name = dot + 1;
 
-        /* Look up enter method */
         char enter_key[512];
         snprintf(enter_key, sizeof(enter_key), "%.*s.%s.enter", (int)mod_len, type_name, class_name);
         const char *enter_c = func_map_lookup(cg, enter_key);
@@ -450,7 +456,6 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
         size_t mod_len = dot - type_name;
         const char *class_name = dot + 1;
 
-        /* Look up exit method */
         char exit_key[512];
         snprintf(exit_key, sizeof(exit_key), "%.*s.%s.exit", (int)mod_len, type_name, class_name);
         const char *exit_c = func_map_lookup(cg, exit_key);

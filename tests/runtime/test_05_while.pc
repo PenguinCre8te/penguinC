@@ -1,11 +1,11 @@
-#import std.io;
+#import std.console;
 int main() {
     mut int i = 0;
     while i < 5 {
-        io.print_int(i);
-        io.print(" ");
+        console.print_int(i);
+        console.print(" ");
         i += 1;
     }
-    io.print("\n");
+    console.print("\n");
     return 0;
 }

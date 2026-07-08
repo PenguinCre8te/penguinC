@@ -1,0 +1,11 @@
+#import std.console
+#import std.files
+
+long main() {
+    mut long f = files.open("/tmp/penguinc_test2.txt", 1)
+    console.println(f.toS())
+    long n = files.file.writeStr(f, "hello")
+    console.println(n.toS())
+    files.file.flush(f)
+    files.file.exit(f)
+}
