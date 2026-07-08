@@ -1,0 +1,1 @@
+shared mutable variable 'counter' must be written inside a 'using' block

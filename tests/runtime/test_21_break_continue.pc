@@ -1,6 +1,6 @@
 #import std.io;
 int main() {
-    int sum = 0;
+    mut int sum = 0;
     for i in 0..10 {
         if i == 5 {
             break;
@@ -8,7 +8,7 @@ int main() {
         sum += i;
     }
     io.println_int(sum);
-    int count = 0;
+    mut int count = 0;
     for i in 0..10 {
         if i % 2 == 0 {
             continue;

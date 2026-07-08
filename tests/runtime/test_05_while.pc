@@ -1,6 +1,6 @@
 #import std.io;
 int main() {
-    int i = 0;
+    mut int i = 0;
     while i < 5 {
         io.print_int(i);
         io.print(" ");

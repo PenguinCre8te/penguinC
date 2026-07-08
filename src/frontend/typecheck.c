@@ -100,20 +100,18 @@ static const char *type_name_str(TCType t) {
 static void tc_error(TCContext *tc, SrcLoc loc, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    fprintf(stderr, "%s:%d:%d: error: ", loc.filename ? loc.filename : tc->filename, loc.line, loc.col);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
+    /* Use print_error_context for rich formatting (source line + caret) */
+    if (error_get_test_mode()) {
+        vfprintf(stderr, fmt, args);
+        fprintf(stderr, "\n");
+    } else {
+        /* Build the message string, then pass to print_error_context */
+        char msg[1024];
+        vsnprintf(msg, sizeof(msg), fmt, args);
+        print_error_context(loc, "%s", msg);
+    }
     va_end(args);
     tc->error_count++;
-}
-
-static void tc_warn(TCContext *tc, SrcLoc loc, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    fprintf(stderr, "%s:%d:%d: warning: ", loc.filename ? loc.filename : tc->filename, loc.line, loc.col);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-    va_end(args);
 }
 
 /* ------------------------------------------------------------------ */
@@ -139,7 +137,7 @@ static void scope_pop(TCContext *tc) {
     }
 }
 
-static int scope_add_var(TCContext *tc, const char *name, TCType type, int is_mut, int line, int col) {
+static int scope_add_var(TCContext *tc, const char *name, TCType type, int is_mut, int is_shared, int line, int col) {
     TCScope *scope = tc->current_scope;
     if (!scope) return 0;
 
@@ -156,6 +154,7 @@ static int scope_add_var(TCContext *tc, const char *name, TCType type, int is_mu
     scope->vars[scope->count].name = strdup(name);
     scope->vars[scope->count].type = type;
     scope->vars[scope->count].is_mut = is_mut;
+    scope->vars[scope->count].is_shared = is_shared;
     scope->vars[scope->count].line = line;
     scope->vars[scope->count].col = col;
     scope->count++;
@@ -572,15 +571,20 @@ static TCType tc_assign(TCContext *tc, AstNode *node) {
         int found = 0;
         TCType vt = scope_lookup_var(tc, name, &found);
         if (found && vt.kind != TC_TYPE_ERROR) {
-            /* Look up is_mut from scope */
+            /* Look up is_mut and is_shared from scope */
             TCScope *scope = tc->current_scope;
             while (scope) {
                 for (size_t i = 0; i < scope->count; i++) {
                     if (strcmp(scope->vars[i].name, name) == 0) {
                         if (!scope->vars[i].is_mut) {
-                            tc_warn(tc, node->loc,
+                            tc_error(tc, node->loc,
                                 "variable '%s' is not mutable, use 'mut %s' to declare as mutable",
                                 name, name);
+                        }
+                        if (scope->vars[i].is_shared && scope->vars[i].is_mut && tc->using_depth == 0) {
+                            tc_error(tc, node->loc,
+                                "shared mutable variable '%s' must be written inside a 'using' block",
+                                name);
                         }
                         goto found_var;
                     }
@@ -892,7 +896,7 @@ static void tc_var_decl(TCContext *tc, AstNode *node) {
         }
     }
 
-    scope_add_var(tc, var_name, decl_type, node->as.var_decl.is_mut,
+    scope_add_var(tc, var_name, decl_type, node->as.var_decl.is_mut, node->as.var_decl.is_shared,
                   node->loc.line, node->loc.col);
 }
 
@@ -937,7 +941,7 @@ static void tc_do_while(TCContext *tc, AstNode *node) {
 static void tc_for(TCContext *tc, AstNode *node) {
     tc_expr(tc, node->as.for_stmt.iter);
     scope_push(tc);
-    scope_add_var(tc, node->as.for_stmt.var, make_type(TC_INT), 1,
+    scope_add_var(tc, node->as.for_stmt.var, make_type(TC_INT), 1, 0,
                   node->loc.line, node->loc.col);
     tc_block(tc, node->as.for_stmt.body);
     scope_pop(tc);
@@ -971,9 +975,11 @@ static void tc_switch(TCContext *tc, AstNode *node) {
 
 static void tc_using(TCContext *tc, AstNode *node) {
     tc_expr(tc, node->as.using_stmt.resource);
+    tc->using_depth++;
     scope_push(tc);
     tc_block(tc, node->as.using_stmt.body);
     scope_pop(tc);
+    tc->using_depth--;
 }
 
 static void tc_match(TCContext *tc, AstNode *node) {
@@ -1129,7 +1135,7 @@ static void tc_program(TCContext *tc, AstNode *program) {
                 const char *type_str = decl->as.var_decl.type;
                 const char *var_name = decl->as.var_decl.name;
                 TCType decl_type = resolve_tc_type(tc, type_str);
-                scope_add_var(tc, var_name, decl_type, decl->as.var_decl.is_mut,
+                scope_add_var(tc, var_name, decl_type, decl->as.var_decl.is_mut, decl->as.var_decl.is_shared,
                               decl->loc.line, decl->loc.col);
                 break;
             }
@@ -1149,7 +1155,7 @@ static void tc_program(TCContext *tc, AstNode *program) {
             for (size_t j = 0; j < decl->as.func_decl.params.count; j++) {
                 AstNode *p = decl->as.func_decl.params.items[j];
                 TCType pt = resolve_tc_type(tc, p->as.param.type);
-                scope_add_var(tc, p->as.param.name, pt, 1,
+                scope_add_var(tc, p->as.param.name, pt, 1, 0,
                               p->loc.line, p->loc.col);
             }
 
@@ -1167,13 +1173,13 @@ static void tc_program(TCContext *tc, AstNode *program) {
                     tc->current_func_node = m;
 
                     TCType self_type = make_class_type(class_name);
-                    scope_add_var(tc, "self", self_type, 1,
+                    scope_add_var(tc, "self", self_type, 1, 0,
                                   m->loc.line, m->loc.col);
 
                     for (size_t k = 0; k < m->as.func_decl.params.count; k++) {
                         AstNode *p = m->as.func_decl.params.items[k];
                         TCType pt = resolve_tc_type(tc, p->as.param.type);
-                        scope_add_var(tc, p->as.param.name, pt, 1,
+                        scope_add_var(tc, p->as.param.name, pt, 1, 0,
                                       p->loc.line, p->loc.col);
                     }
 
@@ -1199,7 +1205,7 @@ int typecheck(AstNode *program, const char *filename, const char *src) {
     tc_program(&tc, program);
     scope_pop(&tc);
 
-    if (tc.error_count > 0) {
+    if (tc.error_count > 0 && !error_get_test_mode()) {
         fprintf(stderr, "penguinc: %d type error(s) found\n", tc.error_count);
     }
 

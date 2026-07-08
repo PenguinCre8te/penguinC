@@ -48,10 +48,13 @@ runtime/arc.o: runtime/arc.c
 test: $(BIN) stdlib
 	@./tests/run_tests.sh
 
+test-errors: $(BIN) stdlib
+	@./tests/run_errors.sh
+
 test-%: $(BIN) stdlib
 	@./tests/run_tests.sh $*
 
 clean:
 	rm -rf src/build $(BIN) $(STDLIB)/io/*.o $(STDLIB)/threads/*.o $(STDLIB)/mutex/*.o runtime/*.o
 
-.PHONY: all clean test stdlib
+.PHONY: all clean test test-errors stdlib

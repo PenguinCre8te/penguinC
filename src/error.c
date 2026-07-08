@@ -3,10 +3,19 @@
 #include <string.h>
 
 static const char *g_source = NULL;
+static int g_test_mode = 0;
 
 void error_set_source(const char *filename, const char *src) {
     (void)filename;
     g_source = src;
+}
+
+void error_set_test_mode(int enabled) {
+    g_test_mode = enabled;
+}
+
+int error_get_test_mode(void) {
+    return g_test_mode;
 }
 
 static const char *kind_str(ErrorKind kind) {
@@ -32,7 +41,62 @@ static void find_line(const char *src, int line_num,
     *end = p;
 }
 
+/* Print error header + source context without exiting (for typecheck) */
+void print_error_context(SrcLoc loc, const char *fmt, ...) {
+    if (g_test_mode) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(stderr, fmt, args);
+        va_end(args);
+        fprintf(stderr, "\n");
+        return;
+    }
+
+    /* Colored error label */
+    fprintf(stderr, "\033[1;31merror\033[0m");
+    if (loc.filename) {
+        fprintf(stderr, " in %s", loc.filename);
+    }
+    if (loc.line > 0) {
+        fprintf(stderr, ":%d:%d", loc.line, loc.col);
+    }
+    fprintf(stderr, ": ");
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+
+    fprintf(stderr, "\n");
+
+    /* Show source line + caret if source is available */
+    if (g_source && loc.line > 0) {
+        const char *line_start, *line_end;
+        find_line(g_source, loc.line, &line_start, &line_end);
+
+        fprintf(stderr, "  %d | ", loc.line);
+        fwrite(line_start, 1, line_end - line_start, stderr);
+        fprintf(stderr, "\n");
+
+        fprintf(stderr, "  %*s | ", loc.line >= 10 ? 2 : 1, "");
+        for (int i = 1; i < loc.col; i++) {
+            fputc(' ', stderr);
+        }
+        fprintf(stderr, "\033[1;31m^\033[0m\n");
+    }
+}
+
 void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...) {
+    if (g_test_mode) {
+        /* Clean output: just the error message */
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(stderr, fmt, args);
+        va_end(args);
+        fprintf(stderr, "\n");
+        exit(1);
+    }
+
     fprintf(stderr, "\033[1;31m%s\033[0m", kind_str(kind));
     if (loc.filename) {
         fprintf(stderr, " in %s", loc.filename);
@@ -71,6 +135,15 @@ void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...) {
 }
 
 void error_fatal(ErrorKind kind, const char *fmt, ...) {
+    if (g_test_mode) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(stderr, fmt, args);
+        va_end(args);
+        fprintf(stderr, "\n");
+        exit(1);
+    }
+
     fprintf(stderr, "\033[1;31m%s\033[0m: ", kind_str(kind));
 
     va_list args;
@@ -83,6 +156,11 @@ void error_fatal(ErrorKind kind, const char *fmt, ...) {
 }
 
 void warn_at(SrcLoc loc, const char *fmt, ...) {
+    if (g_test_mode) {
+        /* Suppress warnings in test mode */
+        return;
+    }
+
     fprintf(stderr, "\033[1;33mwarning\033[0m");
     if (loc.filename) {
         fprintf(stderr, " in %s", loc.filename);

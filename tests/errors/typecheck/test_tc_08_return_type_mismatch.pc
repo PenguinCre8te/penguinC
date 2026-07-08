@@ -1,0 +1,8 @@
+#import std.io;
+string getName() {
+    return 42;
+}
+int main() {
+    string name = getName();
+    return 0;
+}

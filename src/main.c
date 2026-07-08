@@ -308,6 +308,7 @@ static void print_usage(void) {
         "  -O1            Basic optimizations\n"
         "  -O2            Default optimizations\n"
         "  -O3            Aggressive optimizations\n"
+        "  --for-test     Clean error output for testing (no colors, no source context)\n"
         "  --version      Print version\n"
         "  --help         Print this help\n"
     );
@@ -322,6 +323,7 @@ int main(int argc, char **argv) {
     const char *input_file = NULL;
     const char *output_file = NULL;
     int compile_only = 0;
+    int for_test = 0;
     OptLevel opt = OPT_NONE;
     LinkPaths links = {0};
 
@@ -330,6 +332,8 @@ int main(int argc, char **argv) {
             output_file = argv[++i];
         } else if (strcmp(argv[i], "-c") == 0) {
             compile_only = 1;
+        } else if (strcmp(argv[i], "--for-test") == 0) {
+            for_test = 1;
         } else if (strcmp(argv[i], "-O0") == 0) {
             opt = OPT_NONE;
         } else if (strcmp(argv[i], "-O1") == 0) {
@@ -369,11 +373,13 @@ int main(int argc, char **argv) {
 
     char *src = read_file(input_file);
     error_set_source(input_file, src);
+    if (for_test) error_set_test_mode(1);
     AstNode *ast = parse_file(input_file, src);
 
     int tc_errors = typecheck(ast, input_file, src);
     if (tc_errors > 0) {
-        fprintf(stderr, "penguinc: compilation aborted due to type errors\n");
+        if (!for_test)
+            fprintf(stderr, "penguinc: compilation aborted due to type errors\n");
         free(src);
         return 1;
     }

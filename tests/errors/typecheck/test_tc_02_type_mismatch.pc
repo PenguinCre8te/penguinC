@@ -1,4 +1,4 @@
 #import std.io;
 int main() {
-    int x = 5 + "hello";
+    int x = "hello";
 }

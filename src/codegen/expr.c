@@ -479,12 +479,10 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                         if (argt) free(argt);
                     }
                 } else {
-                    size_t ac = node->as.call.args.count;
-                    LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
-                    for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
-                    callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)ac, 0);
-                    callee = get_or_declare_runtime_fn(cg, qualified_mangled, callee_fn_type);
-                    if (argt) free(argt);
+                    /* Function not found in func_map or LLVM module — undefined */
+                    error_at(node->loc, ERR_SEMANTIC,
+                        "undefined function '%s.%s'", obj->as.ident.name, member);
+                    return NULL;
                 }
             }
         }

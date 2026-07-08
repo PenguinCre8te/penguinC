@@ -33,6 +33,7 @@ typedef struct {
     char *name;
     TCType type;
     int is_mut;
+    int is_shared;
     int line;
     int col;
 } TCVar;
@@ -102,6 +103,7 @@ typedef struct {
     const char *filename;
     const char *src;
     AstNode *current_func_node;
+    int using_depth;
 } TCContext;
 
 int typecheck(AstNode *program, const char *filename, const char *src);

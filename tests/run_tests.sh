@@ -9,6 +9,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BIN="$PROJECT_DIR/penguinc"
 STDLIB_DIR="$PROJECT_DIR/stdlib"
 RUNTIME_DIR="$PROJECT_DIR/runtime"
+TESTS_DIR="$SCRIPT_DIR/runtime"
 TMPDIR=$(mktemp -d)
 
 USE_VALGRIND=1
@@ -34,9 +35,9 @@ run_test() {
     local result_dir="$2"
 
     local pc_file
-    pc_file=$(ls "$SCRIPT_DIR"/test_$(printf '%02d' $test_num)_*.pc 2>/dev/null | head -1)
+    pc_file=$(ls "$TESTS_DIR"/test_$(printf '%02d' $test_num)_*.pc 2>/dev/null | head -1)
     local expected_file
-    expected_file=$(ls "$SCRIPT_DIR"/test_$(printf '%02d' $test_num)_*.expected 2>/dev/null | head -1)
+    expected_file=$(ls "$TESTS_DIR"/test_$(printf '%02d' $test_num)_*.expected 2>/dev/null | head -1)
 
     if [ -z "$pc_file" ] || [ -z "$expected_file" ]; then
         echo "SKIP" > "$result_dir/status"
@@ -100,9 +101,9 @@ run_test() {
 }
 
 export -f run_test
-export SCRIPT_DIR BIN STDLIB_DIR RUNTIME_DIR USE_VALGRIND
+export TESTS_DIR BIN STDLIB_DIR RUNTIME_DIR USE_VALGRIND
 
-echo "=== penguinC Test ==="
+echo "=== penguinC Runtime Tests ==="
 echo ""
 
 if [ ${#TESTS[@]} -gt 0 ]; then

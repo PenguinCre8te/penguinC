@@ -1,0 +1,5 @@
+#import std.io;
+int main() {
+    io.nonexistent_func(42);
+    return 0;
+}

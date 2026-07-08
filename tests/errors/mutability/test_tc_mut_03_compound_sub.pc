@@ -1,0 +1,6 @@
+#import std.io;
+int main() {
+    int x = 5;
+    x -= 2;
+    return 0;
+}

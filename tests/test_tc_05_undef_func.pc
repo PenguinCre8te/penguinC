@@ -1,4 +1,0 @@
-#import std.io;
-int main() {
-    int x = undefined_func(1, 2, 3);
-}

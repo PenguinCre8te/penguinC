@@ -1,0 +1,6 @@
+#import std.io;
+int main() {
+    mut int x = 5;
+    x += "hello";
+    return 0;
+}

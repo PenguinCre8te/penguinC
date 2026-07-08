@@ -15,6 +15,13 @@ typedef enum {
 /* Store source context for error display */
 void error_set_source(const char *filename, const char *src);
 
+/* Test mode: clean output without colors or source context */
+void error_set_test_mode(int enabled);
+int error_get_test_mode(void);
+
+/* Print error header + source context without exiting (for typecheck) */
+void print_error_context(SrcLoc loc, const char *fmt, ...);
+
 /* Print a formatted error message with source location and exit */
 void error_at(SrcLoc loc, ErrorKind kind, const char *fmt, ...);
 

@@ -1,0 +1,7 @@
+#import std.io;
+int main() {
+    for i in 0.."hello" {
+        io.println_int(i);
+    }
+    return 0;
+}

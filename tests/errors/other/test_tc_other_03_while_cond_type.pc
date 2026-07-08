@@ -1,0 +1,7 @@
+#import std.io;
+int main() {
+    while 42 {
+        io.println("loop");
+    }
+    return 0;
+}

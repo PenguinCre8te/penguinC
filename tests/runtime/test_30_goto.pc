@@ -1,6 +1,6 @@
 #import std.io;
 int main() {
-    int x = 0;
+    mut int x = 0;
     goto skip;
     x = 100;
     skip:

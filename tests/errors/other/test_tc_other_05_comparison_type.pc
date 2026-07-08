@@ -1,0 +1,9 @@
+#import std.io;
+int main() {
+    for i in 0..5 {
+        if i == "hello" {
+            io.println("found");
+        }
+    }
+    return 0;
+}

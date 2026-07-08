@@ -6,7 +6,7 @@ enum Color {
 }
 
 int main() {
-    int c = RED;
+    mut int c = RED;
     io.println_int(c);
     c = BLUE;
     io.println_int(c);
