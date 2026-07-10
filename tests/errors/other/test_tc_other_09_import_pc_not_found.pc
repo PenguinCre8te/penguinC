@@ -1,0 +1,4 @@
+#import "./nonexistent.pc"
+int main() {
+    0;
+}

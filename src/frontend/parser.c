@@ -287,6 +287,8 @@ static AstNode *parse_import_directive(void) {
                     nodelist_push(&node->as.import.links, hdr->as.import.links.items[i]);
                 free(hdr->as.import.module);
                 free(hdr);
+            } else {
+                error_at(loc, ERR_PARSER, "cannot open file '%s'", mod_name);
             }
         }
     }
@@ -305,6 +307,8 @@ static AstNode *parse_import_directive(void) {
                 free(hdr->as.import.module);
                 free(hdr);
             }
+        } else if (node->as.import.func_maps.count == 0 && !node->as.import.is_header) {
+            error_at(loc, ERR_PARSER, "cannot find module '%s'", mod_name);
         }
     }
 

@@ -1,5 +1,5 @@
-#import "./other.pc"
+#import std.console.(print, input)
 
 long main() {
-    other.printPenguin()
+    print(input())
 }
