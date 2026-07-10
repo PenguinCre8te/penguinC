@@ -42,6 +42,10 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
         var_set_struct_name(cg, var_name, type_name);
         var_set_type_name(cg, var_name, type_name);
         var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
+
+        /* Create debug info for this local variable */
+        debug_create_variable(cg, var_name, node->loc, ptr_ty, alloca_inst);
+
         LLVMValueRef init_val = codegen_expr(cg, node->as.var_decl.init);
         if (init_val) LLVMBuildStore(cg->builder, init_val, alloca_inst);
         return;
@@ -53,6 +57,9 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
     var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
     if (LLVMGetTypeKind(ty) == LLVMStructTypeKind)
         var_set_struct_name(cg, var_name, type_name);
+
+    /* Create debug info for this local variable */
+    debug_create_variable(cg, var_name, node->loc, ty, alloca_inst);
 
     if (node->as.var_decl.init) {
         AstNode *init_node = node->as.var_decl.init;
@@ -257,6 +264,11 @@ static void codegen_for(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, i64, node->as.for_stmt.var);
     var_push(cg, node->as.for_stmt.var, alloca_inst, i64);
     LLVMBuildStore(cg->builder, range_start, alloca_inst);
+
+    /* Create debug info for for-loop variable */
+    debug_create_variable(cg, node->as.for_stmt.var, node->loc,
+                          i64, alloca_inst);
+
     LLVMBuildBr(cg->builder, cond_bb);
 
     LLVMPositionBuilderAtEnd(cg->builder, cond_bb);
@@ -509,6 +521,9 @@ static void codegen_unsafe(CodegenCtx *cg, AstNode *node) {
 
 void codegen_stmt(CodegenCtx *cg, AstNode *node) {
     if (!node) return;
+
+    /* Set debug location for this statement */
+    debug_set_location(cg, node->loc);
 
     if (node->type == NODE_LABEL || node->type == NODE_GOTO ||
         node->type == NODE_BREAK || node->type == NODE_CONTINUE) {

@@ -1,0 +1,12 @@
+#import std.console.print
+// or std.console.*
+// or std.console.typewriter.print where typewriter is a submodule of console existing inside a directory
+// or std.console as io
+// or std.console.{print, println}
+// #import "./maybeotherscripts.pc"
+// #import "./maybeotherscripts.pc" as otherscript
+// #import "./maybeotherscripts.pc".penguin as quack
+// #import "./maybeotherscripts.pc".*
+int main() {
+    print("penguin")
+}

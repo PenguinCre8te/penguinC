@@ -1,9 +1,5 @@
-#import std.console
-#import std.files
+#import "./other.pc"
 
 long main() {
-    using(files.open("./test.txt", "wrong argument") as f) {
-        string answer = console.input()
-        f.writeStr(answer)
-    }
+    other.printPenguin()
 }

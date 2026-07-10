@@ -109,6 +109,11 @@ static int is_ident_like_type(void) {
     }
 }
 
+/* Forward declarations */
+static char *resolve_module_path(const char *module);
+static AstNode *parse_header_file(const char *filepath);
+static AstNode *parse_pc_file(const char *filepath);
+
 /* ------------------------------------------------------------------ */
 /*  Dotted name: std.io, foo.bar.baz                                   */
 /* ------------------------------------------------------------------ */
@@ -140,6 +145,170 @@ static char *parse_dotted_name(void) {
         len += seg_len;
     }
     return name;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Import directive parsing                                           */
+/*  Supports:                                                          */
+/*    #import std.console.print                                        */
+/*    #import std.console.*                                            */
+/*    #import std.console as io                                        */
+/*    #import std.console.(print, println)                             */
+/*    #import "./other.pc"                                             */
+/*    #import "./other.pc" as otherscript                              */
+/*    #import "./other.pc".penguin as quack                            */
+/*    #import "./other.pc".*                                           */
+/* ------------------------------------------------------------------ */
+static AstNode *parse_import_directive(void) {
+    SrcLoc loc = cur()->loc;
+    char *mod_name = NULL;
+    int is_header = 0;
+    char *alias = NULL;
+    int wildcard = 0;
+    NodeList selected_names;
+    nodelist_init(&selected_names);
+    char *submodule = NULL;
+
+    /* Parse the import target: string literal or dotted identifier */
+    if (cur_is(TOK_STRING_LIT)) {
+        Token path = *cur();
+        adv();
+        mod_name = path.value;
+        size_t len = strlen(mod_name);
+        if (len >= 3 && strcmp(mod_name + len - 3, ".ph") == 0) {
+            is_header = 1;
+        }
+    } else if (cur_is(TOK_IDENT)) {
+        mod_name = parse_dotted_name();
+    } else {
+        error_at(cur()->loc, ERR_PARSER,
+                 "expected module name or path string after 'import', got '%s'",
+                 token_type_name(cur()->type));
+        match(TOK_SEMICOLON);
+        return ast_new_import(loc, "error", 0);
+    }
+
+    /* Parse optional submodule: .ident after the target */
+    if (cur_is(TOK_DOT) && peek_is(TOK_IDENT)) {
+        /* Check if next-next is 'as', '(' or ';' — if so, this is submodule */
+        Lexer saved = *P;
+        adv(); /* consume '.' */
+        Token sub = *cur();
+        adv(); /* consume submodule ident */
+
+        /* If followed by 'as', '.', '(', ';', or EOF — it's a submodule */
+        if (cur_is(TOK_AS) || cur_is(TOK_DOT) || cur_is(TOK_LPAREN) ||
+            cur_is(TOK_SEMICOLON) || cur_is(TOK_EOF)) {
+            submodule = sub.value;
+        } else {
+            /* Not a submodule — back up and treat as part of dotted name */
+            *P = saved;
+            free(sub.value);
+            /* Continue parsing dotted name segments */
+            while (cur_is(TOK_DOT) && peek_is(TOK_IDENT)) {
+                /* Re-parse the dot + ident we just backed over */
+                saved = *P;
+                adv(); /* dot */
+                Token part = *cur();
+                adv();
+                size_t old_len = strlen(mod_name);
+                size_t seg_len = 1 + strlen(part.value);
+                mod_name = realloc(mod_name, old_len + seg_len + 1);
+                mod_name[old_len] = '.';
+                strcpy(mod_name + old_len + 1, part.value);
+            }
+        }
+    }
+
+    /* Parse optional .* wildcard */
+    if (cur_is(TOK_DOT) && peek_is(TOK_STAR)) {
+        adv(); /* dot */
+        adv(); /* star */
+        wildcard = 1;
+    }
+
+    /* Parse optional .(name1, name2) selective import (dot before paren) */
+    if (cur_is(TOK_DOT) && peek_is(TOK_LPAREN)) {
+        adv(); /* dot */
+    }
+
+    /* Parse optional (name1, name2) selective import */
+    if (cur_is(TOK_LPAREN)) {
+        adv(); /* consume '(' */
+        if (!cur_is(TOK_RPAREN)) {
+            Token name = expect(TOK_IDENT);
+            nodelist_push(&selected_names, ast_new_ident(name.loc, name.value));
+            while (match(TOK_COMMA)) {
+                name = expect(TOK_IDENT);
+                nodelist_push(&selected_names, ast_new_ident(name.loc, name.value));
+            }
+        }
+        expect(TOK_RPAREN);
+    }
+
+    /* Parse optional "as" alias */
+    if (match(TOK_AS)) {
+        Token alias_tok = expect(TOK_IDENT);
+        alias = alias_tok.value;
+    }
+
+    match(TOK_SEMICOLON);
+
+    /* Build the import node */
+    AstNode *node = ast_new_import(loc, mod_name, is_header);
+    node->as.import.alias = alias;
+    node->as.import.wildcard = wildcard;
+    node->as.import.selected_names = selected_names;
+    node->as.import.submodule = submodule;
+
+    /* For .ph files, parse the header file and merge info */
+    if (is_header) {
+        AstNode *hdr = parse_header_file(mod_name);
+        if (hdr) {
+            /* Transfer func_maps and links from header to our import node */
+            for (size_t i = 0; i < hdr->as.import.func_maps.count; i++)
+                nodelist_push(&node->as.import.func_maps, hdr->as.import.func_maps.items[i]);
+            for (size_t i = 0; i < hdr->as.import.links.count; i++)
+                nodelist_push(&node->as.import.links, hdr->as.import.links.items[i]);
+            free(hdr->as.import.module);
+            free(hdr);
+        }
+    }
+
+    /* For .pc files, parse the source file and extract function signatures */
+    {
+        size_t len = strlen(mod_name);
+        if (len >= 3 && strcmp(mod_name + len - 3, ".pc") == 0) {
+            AstNode *hdr = parse_pc_file(mod_name);
+            if (hdr) {
+                for (size_t i = 0; i < hdr->as.import.func_maps.count; i++)
+                    nodelist_push(&node->as.import.func_maps, hdr->as.import.func_maps.items[i]);
+                for (size_t i = 0; i < hdr->as.import.links.count; i++)
+                    nodelist_push(&node->as.import.links, hdr->as.import.links.items[i]);
+                free(hdr->as.import.module);
+                free(hdr);
+            }
+        }
+    }
+
+    /* For stdlib modules, try to resolve to a .ph file */
+    if (!is_header && !strchr(mod_name, '/')) {
+        char *ph_path = resolve_module_path(mod_name);
+        if (ph_path) {
+            AstNode *hdr = parse_header_file(ph_path);
+            free(ph_path);
+            if (hdr) {
+                for (size_t i = 0; i < hdr->as.import.func_maps.count; i++)
+                    nodelist_push(&node->as.import.func_maps, hdr->as.import.func_maps.items[i]);
+                for (size_t i = 0; i < hdr->as.import.links.count; i++)
+                    nodelist_push(&node->as.import.links, hdr->as.import.links.items[i]);
+                free(hdr->as.import.module);
+                free(hdr);
+            }
+        }
+    }
+
+    return node;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1116,50 +1285,220 @@ static AstNode *parse_header_file(const char *filepath) {
     return import_node;
 }
 
+/* Parse a .pc file to extract function signatures for importing.
+ * This is a simplified parser that extracts top-level function declarations.
+ * It handles: ret_type name(params) { ... } and #link directives */
+static AstNode *parse_pc_file(const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) return NULL;
+
+    SrcLoc loc = {filepath, 1, 1};
+    AstNode *import_node = ast_new_import(loc, filepath, 1);
+
+    char line[1024];
+    int brace_depth = 0;
+    int in_func = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *s = line;
+
+        /* Track brace depth to skip function bodies */
+        for (char *p = s; *p; p++) {
+            if (*p == '{') brace_depth++;
+            if (*p == '}') { brace_depth--; if (brace_depth < 0) brace_depth = 0; }
+        }
+
+        /* Skip if we're inside a function body */
+        if (in_func) {
+            if (brace_depth == 0) in_func = 0;
+            continue;
+        }
+
+        /* Skip empty lines and comments */
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '\0' || *s == '\n' || *s == '\r') continue;
+        if (*s == '#') {
+            /* Check for #link directive */
+            if (strncmp(s, "#link", 5) == 0) {
+                char *ls = s + 5;
+                while (*ls == ' ' || *ls == '\t') ls++;
+                if (*ls == '"') {
+                    ls++;
+                    char *end = strchr(ls, '"');
+                    if (end) {
+                        *end = '\0';
+                        if (strchr(ls, '/') || ls[0] == '.' || strcmp(ls + strlen(ls) - 2, ".o") == 0) {
+                            char dir[1024];
+                            char abs_ph[1024];
+                            if (realpath(filepath, abs_ph)) {
+                                const char *last_slash = strrchr(abs_ph, '/');
+                                if (last_slash) {
+                                    size_t dirlen = last_slash - abs_ph + 1;
+                                    snprintf(dir, sizeof(dir), "%.*s", (int)dirlen, abs_ph);
+                                } else {
+                                    strcpy(dir, "./");
+                                }
+                            } else {
+                                const char *stdlib = getenv("STDLIB");
+                                if (!stdlib) stdlib = "stdlib";
+                                snprintf(dir, sizeof(dir), "%s/", stdlib);
+                            }
+                            char resolved[1024];
+                            snprintf(resolved, sizeof(resolved), "%s%s", dir, ls);
+                            nodelist_push(&import_node->as.import.links,
+                                ast_new_link(loc, resolved));
+                        } else {
+                            nodelist_push(&import_node->as.import.links,
+                                ast_new_link(loc, ls));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        if (strncmp(s, "class ", 6) == 0 || strncmp(s, "struct ", 7) == 0 ||
+            strncmp(s, "enum ", 5) == 0 || strncmp(s, "typedef ", 8) == 0 ||
+            strncmp(s, "using", 5) == 0 || strncmp(s, "if ", 3) == 0 ||
+            strncmp(s, "for ", 4) == 0 || strncmp(s, "while ", 6) == 0 ||
+            strncmp(s, "return ", 7) == 0 || strncmp(s, "var ", 4) == 0 ||
+            strncmp(s, "mut ", 4) == 0) {
+            /* Non-function top-level constructs — skip */
+            if (brace_depth == 0 && strchr(s, '{')) {
+                /* Multi-line construct — skip until matching brace */
+                while (fgets(line, sizeof(line), f)) {
+                    for (char *p = line; *p; p++) {
+                        if (*p == '{') brace_depth++;
+                        if (*p == '}') { brace_depth--; if (brace_depth < 0) brace_depth = 0; }
+                    }
+                    if (brace_depth == 0) break;
+                }
+            }
+            continue;
+        }
+
+        /* Try to parse function declaration: ret_type name(params) [const] { or ; */
+        {
+            char *open_paren = strchr(s, '(');
+            if (open_paren) {
+                /* Extract function name: the word before '(' */
+                char *name_end = open_paren - 1;
+                while (name_end > s && (*name_end == ' ' || *name_end == '\t'))
+                    name_end--;
+                char *name_start = name_end;
+                while (name_start > s && *(name_start - 1) != ' ' &&
+                       *(name_start - 1) != '\t')
+                    name_start--;
+
+                size_t name_len = name_end - name_start + 1;
+                if (name_len > 0 && name_len < 256) {
+                    char func_name[256];
+                    memcpy(func_name, name_start, name_len);
+                    func_name[name_len] = '\0';
+
+                    /* Extract return type: everything before function name */
+                    char ret_type[256] = "void";
+                    {
+                        size_t rt_len = name_start - s;
+                        while (rt_len > 0 && (s[rt_len-1] == ' ' || s[rt_len-1] == '\t'))
+                            rt_len--;
+                        if (rt_len > 0 && rt_len < sizeof(ret_type)) {
+                            memcpy(ret_type, s, rt_len);
+                            ret_type[rt_len] = '\0';
+                        }
+                    }
+
+                    /* Extract parameter types */
+                    char *args_str = open_paren + 1;
+                    char *close_paren = strchr(args_str, ')');
+                    if (close_paren) *close_paren = '\0';
+
+                    char mangled[512];
+                    size_t mpos = 0;
+                    mpos += snprintf(mangled + mpos, sizeof(mangled) - mpos, "_pC%s", func_name);
+
+                    const char *param_types_arr[32];
+                    size_t param_count = 0;
+
+                    /* Parse comma-separated args */
+                    char *arg = args_str;
+                    while (*arg) {
+                        while (*arg == ' ' || *arg == '\t') arg++;
+                        if (*arg == '\0') break;
+
+                        char *comma = strchr(arg, ',');
+                        if (comma) *comma = '\0';
+
+                        /* Extract type: everything before the param name */
+                        char *a = arg;
+                        while (*a == ' ' || *a == '\t') a++;
+                        char *space = strchr(a, ' ');
+                        if (space) {
+                            *space = '\0';
+                            /* Skip mut keyword */
+                            if (strcmp(a, "mut") == 0) {
+                                a = space + 1;
+                                while (*a == ' ' || *a == '\t') a++;
+                                space = strchr(a, ' ');
+                                if (space) *space = '\0';
+                            }
+                            const char *t = a;
+                            if (param_count < 32)
+                                param_types_arr[param_count++] = t;
+                            if (strchr(a, '*'))
+                                mangled[mpos++] = 'p';
+                            else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0) mangled[mpos++] = 'i';
+                            else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                            else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
+                            else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
+                            else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                            else {
+                                size_t tlen = strlen(t);
+                                mangled[mpos++] = 'p';
+                                if (tlen > 0) mangled[mpos++] = t[0];
+                            }
+                        }
+                        if (comma) arg = comma + 1;
+                        else break;
+                    }
+                    mangled[mpos] = '\0';
+
+                    /* Determine c_name: for .pc imports, use the mangled name
+                     * (the runtime will provide the symbol when linking the .o) */
+                    AstNode *fm = ast_new_func_map(loc, mangled, mangled);
+                    fm->as.func_map.orig_name = strdup(func_name);
+                    fm->as.func_map.ret_type = strdup(ret_type);
+                    fm->as.func_map.param_count = param_count;
+                    if (param_count > 0) {
+                        fm->as.func_map.param_types = malloc(param_count * sizeof(char *));
+                        for (size_t pi = 0; pi < param_count; pi++)
+                            fm->as.func_map.param_types[pi] = strdup(param_types_arr[pi]);
+                    }
+                    nodelist_push(&import_node->as.import.func_maps, fm);
+
+                    /* Check if this function has a body (not just a prototype) */
+                    /* Look for '{' after the closing paren */
+                    char *after_paren = close_paren ? close_paren + 1 : open_paren + 1;
+                    while (*after_paren == ' ' || *after_paren == '\t' || *after_paren == '\n' || *after_paren == '\r')
+                        after_paren++;
+                    if (*after_paren == '{') {
+                        in_func = 1;
+                        brace_depth = 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fclose(f);
+    return import_node;
+}
+
 static AstNode *parse_top_level(void) {
     switch (cur()->type) {
         case TOK_HASH: {
             adv(); /* consume '#' */
             if (cur_is(TOK_IMPORT)) {
                 adv(); /* consume 'import' */
-                char *mod_name = NULL;
-                int is_header = 0;
-                if (cur_is(TOK_STRING_LIT)) {
-                    Token path = *cur();
-                    adv();
-                    mod_name = path.value;
-                    size_t len = strlen(mod_name);
-                    if (len >= 3 && strcmp(mod_name + len - 3, ".ph") == 0) {
-                        is_header = 1;
-                        /* Parse the .ph file and return it directly */
-                        match(TOK_SEMICOLON);
-                        AstNode *hdr = parse_header_file(mod_name);
-                        if (hdr) return hdr;
-                        /* Fallback: just return a plain import */
-                        return ast_new_import(cur()->loc, mod_name, 1);
-                    }
-                } else if (cur_is(TOK_IDENT)) {
-                    mod_name = parse_dotted_name();
-                    /* For dotted module names, try to resolve to a .ph file */
-                    char *ph_path = resolve_module_path(mod_name);
-                    if (ph_path) {
-                        match(TOK_SEMICOLON);
-                        AstNode *hdr = parse_header_file(ph_path);
-                        free(ph_path);
-                        if (hdr) {
-                            /* Update the module name to the original dotted name */
-                            free(hdr->as.import.module);
-                            hdr->as.import.module = strdup(mod_name);
-                            return hdr;
-                        }
-                    }
-                } else {
-                    error_at(cur()->loc, ERR_PARSER,
-                             "expected module name or path string after 'import', got '%s'",
-                             token_type_name(cur()->type));
-                }
-                match(TOK_SEMICOLON);
-                return ast_new_import(cur()->loc, mod_name, is_header);
+                return parse_import_directive();
             } else if (cur_is(TOK_LINK)) {
                 adv(); /* consume 'link' */
                 Token path = expect(TOK_STRING_LIT);

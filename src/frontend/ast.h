@@ -161,7 +161,16 @@ struct AstNode {
         struct { NodeList imports; NodeList decls; } program;
 
         /* NODE_IMPORT */
-        struct { char *module; int is_header; NodeList func_maps; NodeList links; } import;
+        struct {
+            char *module;           /* original module path */
+            int is_header;
+            NodeList func_maps;
+            NodeList links;
+            char *alias;            /* "as" alias name */
+            int wildcard;           /* 1 if .* import */
+            NodeList selected_names; /* for (name1, name2) selective import */
+            char *submodule;        /* submodule suffix (e.g. .print in std.console.print) */
+        } import;
 
         /* NODE_LINK */
         struct { char *path; } link;

@@ -1,0 +1,6 @@
+#import std.console as io
+int main() {
+    io.println("alias import");
+    io.println_int(77);
+    return 0;
+}

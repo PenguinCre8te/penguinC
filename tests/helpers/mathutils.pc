@@ -1,0 +1,9 @@
+#link "./mathutils.o";
+
+long square(int val) {
+    return val * val;
+}
+
+long add(int a, int b) {
+    return a + b;
+}

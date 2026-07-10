@@ -10,6 +10,7 @@
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+#include <llvm-c/DebugInfo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +69,13 @@ typedef struct {
 
     int loop_depth;
     size_t scope_base;
+
+    /* Debug info */
+    int debug_enabled;
+    LLVMDIBuilderRef dibuilder;
+    LLVMMetadataRef  dicu;       /* DICompileUnit */
+    LLVMMetadataRef  difile;     /* current DIFile */
+    LLVMMetadataRef  discope;    /* current DIScope (subprogram or CU) */
 } CodegenCtx;
 
 /* ------------------------------------------------------------------ */
@@ -161,5 +169,20 @@ void codegen_import(CodegenCtx *cg, AstNode *decl);
 /*  codegen_decl.c — declaration codegen                               */
 /* ------------------------------------------------------------------ */
 void codegen_program(CodegenCtx *cg, AstNode *program);
+
+/* ------------------------------------------------------------------ */
+/*  codegen_debug.c — debug symbol generation                          */
+/* ------------------------------------------------------------------ */
+void debug_init(CodegenCtx *cg, const char *filename);
+void debug_finalize(CodegenCtx *cg);
+void debug_set_location(CodegenCtx *cg, SrcLoc loc);
+LLVMMetadataRef debug_type(CodegenCtx *cg, LLVMTypeRef ty);
+void debug_create_function(CodegenCtx *cg, const char *name,
+                           const char *linkage_name, SrcLoc loc,
+                           LLVMTypeRef fn_type, LLVMValueRef fn);
+void debug_create_param(CodegenCtx *cg, const char *name, unsigned argno,
+                        SrcLoc loc, LLVMTypeRef llvm_ty, LLVMValueRef alloca);
+void debug_create_variable(CodegenCtx *cg, const char *name, SrcLoc loc,
+                           LLVMTypeRef llvm_ty, LLVMValueRef alloca);
 
 #endif /* PENGUINC_CODEGEN_INTERNAL_H */

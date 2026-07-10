@@ -54,6 +54,10 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(cg->ctx, fn, "entry");
     LLVMPositionBuilderAtEnd(cg->builder, entry);
 
+    /* Create debug subprogram for this function */
+    debug_create_function(cg, name, mangled, node->loc,
+                          fn_type, fn);
+
     LLVMValueRef prev_fn = cg->cur_fn;
     cg->cur_fn = fn;
 
@@ -76,6 +80,13 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
         LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, pty, param_name);
         LLVMBuildStore(cg->builder, param, alloca_inst);
         var_push(cg, param_name, alloca_inst, pty);
+
+        /* Create debug info for this parameter */
+        if (node->loc.line > 0) {
+            debug_create_param(cg, param_name, i + 1,
+                               node->loc, pty, alloca_inst);
+        }
+
         if (!node->as.func_decl.is_method || i != 0) {
             size_t pidx = node->as.func_decl.is_method ? i - 1 : i;
             if (pidx < node->as.func_decl.params.count) {
@@ -107,6 +118,7 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
 
     cg->var_count = prev_var_count;
     cg->cur_fn = prev_fn;
+    if (cg->debug_enabled) cg->discope = cg->dicu;
 
     if (param_types) free(param_types);
 }

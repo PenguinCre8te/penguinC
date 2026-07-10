@@ -610,6 +610,22 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                         return NULL;
                 }
             }
+            if (!callee) {
+                const char *c_name = func_map_lookup(cg, mangled);
+                if (!c_name) c_name = func_map_lookup(cg, ident_name);
+                if (c_name) {
+                    callee_fn_type = fn_type_lookup(cg, c_name);
+                    if (!callee_fn_type) {
+                        size_t ac = node->as.call.args.count;
+                        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                        LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
+                        for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
+                        callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)ac, 0);
+                        if (argt) free(argt);
+                    }
+                    callee = get_or_declare_runtime_fn(cg, c_name, callee_fn_type);
+                }
+            }
         }
     } else {
         callee = codegen_expr(cg, node->as.call.callee);

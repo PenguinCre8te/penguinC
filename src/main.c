@@ -34,6 +34,7 @@ static void print_usage(void) {
         "Options:\n"
         "  -o <file>      Set output file (default: derive from input)\n"
         "  -c             Compile only, do not link\n"
+        "  -g             Generate debug symbols (DWARF)\n"
         "  -O0            No optimizations (default)\n"
         "  -O1            Basic optimizations\n"
         "  -O2            Default optimizations\n"
@@ -56,6 +57,7 @@ int main(int argc, char **argv) {
     const char *output_file = NULL;
     int compile_only = 0;
     int for_test = 0;
+    int debug_enabled = 0;
     OptLevel opt = OPT_NONE;
     LinkPaths links = {0};
 
@@ -74,6 +76,8 @@ int main(int argc, char **argv) {
             opt = OPT_DEFAULT;
         } else if (strcmp(argv[i], "-O3") == 0) {
             opt = OPT_AGGRESSIVE;
+        } else if (strcmp(argv[i], "-g") == 0) {
+            debug_enabled = 1;
         } else if (strcmp(argv[i], "--version") == 0) {
             fprintf(stderr, "penguinc " PENGUINC_VERSION "\n");
             return 0;
@@ -122,7 +126,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    codegen(ast, output_file, opt, &links);
+    codegen(ast, output_file, opt, &links, debug_enabled);
 
     /* Auto-link when not compile-only: use resolved link paths */
     if (!compile_only && links.count > 0) {

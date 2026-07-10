@@ -1,0 +1,4 @@
+#import std.console.(println)
+int main() {
+    print("hello");
+}

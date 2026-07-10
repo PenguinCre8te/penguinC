@@ -273,13 +273,44 @@ static void tc_func_push(TCContext *tc, const char *name, TCType ret_type,
 }
 
 static TCFuncSig *tc_func_lookup(TCContext *tc, const char *name, size_t param_count) {
+    TCFuncSig *fallback = NULL;
     for (size_t i = tc->func_count; i > 0; i--) {
         if (strcmp(tc->funcs[i - 1].name, name) == 0 &&
             tc->funcs[i - 1].param_count == param_count) {
-            return &tc->funcs[i - 1];
+            if (!fallback) fallback = &tc->funcs[i - 1];
         }
     }
-    return NULL;
+    return fallback;
+}
+
+static TCFuncSig *tc_func_lookup_best(TCContext *tc, const char *name, TCType *arg_types, size_t argc) {
+    TCFuncSig *best = NULL;
+    int best_score = -1;
+    for (size_t i = 0; i < tc->func_count; i++) {
+        if (strcmp(tc->funcs[i].name, name) != 0) continue;
+        if (tc->funcs[i].param_count != argc) continue;
+
+        int score = 0;
+        int all_match = 1;
+        for (size_t j = 0; j < argc; j++) {
+            if (tc->funcs[i].param_types[j].kind == TC_TYPE_ERROR ||
+                arg_types[j].kind == TC_TYPE_ERROR) {
+                score += 1;
+                continue;
+            }
+            if (types_equal(arg_types[j], tc->funcs[i].param_types[j]))
+                score += 3;
+            else if (is_coercible(arg_types[j], tc->funcs[i].param_types[j]))
+                score += 1;
+            else
+                all_match = 0;
+        }
+        if (all_match && score > best_score) {
+            best_score = score;
+            best = &tc->funcs[i];
+        }
+    }
+    return best;
 }
 
 static TCFuncSig *tc_func_lookup_any(TCContext *tc, const char *name) {
@@ -637,21 +668,27 @@ static TCType tc_call(TCContext *tc, AstNode *node) {
         const char *name = node->as.call.callee->as.ident.name;
         size_t argc = node->as.call.args.count;
 
-        TCFuncSig *fn = tc_func_lookup(tc, name, argc);
+        TCType *arg_types = argc > 0 ? malloc(argc * sizeof(TCType)) : NULL;
+        for (size_t i = 0; i < argc; i++)
+            arg_types[i] = tc_expr(tc, node->as.call.args.items[i]);
+
+        TCFuncSig *fn = tc_func_lookup_best(tc, name, arg_types, argc);
+        if (!fn) fn = tc_func_lookup(tc, name, argc);
         if (fn) {
             for (size_t i = 0; i < argc; i++) {
-                TCType arg_type = tc_expr(tc, node->as.call.args.items[i]);
                 if (i < fn->param_count && fn->param_types[i].kind != TC_TYPE_ERROR &&
-                    arg_type.kind != TC_TYPE_ERROR) {
-                    if (!is_coercible(arg_type, fn->param_types[i])) {
+                    arg_types[i].kind != TC_TYPE_ERROR) {
+                    if (!is_coercible(arg_types[i], fn->param_types[i])) {
                         tc_error(tc, node->as.call.args.items[i]->loc,
                             "argument %zu: type mismatch, expected '%s' got '%s'",
                             i + 1, type_name_str(fn->param_types[i]),
-                            type_name_str(arg_type));
+                            type_name_str(arg_types[i]));
                     }
                 }
             }
-            return fn->ret_type;
+            TCType ret = fn->ret_type;
+            free(arg_types);
+            return ret;
         }
 
         TCFuncSig *any_fn = tc_func_lookup_any(tc, name);
@@ -675,8 +712,7 @@ static TCType tc_call(TCContext *tc, AstNode *node) {
             tc_error(tc, node->loc, "undefined function '%s'", name);
         }
 
-        for (size_t i = 0; i < argc; i++)
-            tc_expr(tc, node->as.call.args.items[i]);
+        free(arg_types);
         return make_type(TC_UNKNOWN);
     }
 
@@ -1042,6 +1078,87 @@ static void tc_stmt(TCContext *tc, AstNode *node) {
 /*  Declaration type-checking                                          */
 /* ------------------------------------------------------------------ */
 
+static int name_in_selected_tc(AstNode *fm, NodeList *selected) {
+    if (!fm || fm->type != NODE_FUNC_MAP) return 0;
+    const char *orig = fm->as.func_map.orig_name;
+    if (!orig) return 0;
+    for (size_t i = 0; i < selected->count; i++) {
+        AstNode *sel = selected->items[i];
+        if (sel && sel->type == NODE_IDENTIFIER &&
+            strcmp(sel->as.ident.name, orig) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void tc_import(TCContext *tc, AstNode *node) {
+    const char *mod = node->as.import.module;
+    const char *last = strrchr(mod, '.');
+    last = last ? last + 1 : mod;
+
+    const char *reg_name = last;
+    if (node->as.import.submodule)
+        reg_name = node->as.import.submodule;
+    else if (node->as.import.alias)
+        reg_name = node->as.import.alias;
+
+    /* Local .pc files register under bare names (like wildcard) */
+    size_t mod_len = strlen(mod);
+    int is_local_pc = (mod_len >= 3 && strcmp(mod + mod_len - 3, ".pc") == 0);
+
+    for (size_t k = 0; k < node->as.import.func_maps.count; k++) {
+        AstNode *fm = node->as.import.func_maps.items[k];
+
+        if (node->as.import.selected_names.count > 0) {
+            if (fm && fm->type == NODE_FUNC_MAP) {
+                if (!name_in_selected_tc(fm, &node->as.import.selected_names))
+                    continue;
+            }
+        }
+
+        if (fm && fm->type == NODE_FUNC_MAP) {
+            const char *func_name = fm->as.func_map.orig_name;
+            if (!func_name) func_name = fm->as.func_map.pc_name;
+
+            size_t pc = fm->as.func_map.param_count;
+            TCType ret_type = resolve_tc_type(tc, fm->as.func_map.ret_type);
+            TCType *param_types = pc > 0 ? malloc(pc * sizeof(TCType)) : NULL;
+            for (size_t pi = 0; pi < pc; pi++)
+                param_types[pi] = resolve_tc_type(tc, fm->as.func_map.param_types[pi]);
+
+            if (node->as.import.wildcard || node->as.import.selected_names.count > 0 || is_local_pc) {
+                /* Bare name registration */
+                tc_func_push(tc, func_name, ret_type, param_types, pc,
+                             node->loc.line, node->loc.col);
+                /* If alias, also register alias.funcname */
+                if (node->as.import.alias) {
+                    TCType *alias_pt = pc > 0 ? malloc(pc * sizeof(TCType)) : NULL;
+                    for (size_t pi = 0; pi < pc; pi++)
+                        alias_pt[pi] = param_types[pi];
+                    char qname[512];
+                    snprintf(qname, sizeof(qname), "%s.%s", node->as.import.alias, func_name);
+                    tc_func_push(tc, qname, ret_type, alias_pt, pc,
+                                 node->loc.line, node->loc.col);
+                }
+            } else {
+                char qname[512];
+                snprintf(qname, sizeof(qname), "%s.%s", reg_name, func_name);
+                tc_func_push(tc, qname, ret_type, param_types, pc,
+                             node->loc.line, node->loc.col);
+                if (node->as.import.alias && strcmp(reg_name, last) != 0) {
+                    TCType *alias_pt = pc > 0 ? malloc(pc * sizeof(TCType)) : NULL;
+                    for (size_t pi = 0; pi < pc; pi++)
+                        alias_pt[pi] = param_types[pi];
+                    char qname2[512];
+                    snprintf(qname2, sizeof(qname2), "%s.%s", last, func_name);
+                    tc_func_push(tc, qname2, ret_type, alias_pt, pc,
+                                 node->loc.line, node->loc.col);
+                }
+            }
+        }
+    }
+}
+
 static void tc_struct_decl(TCContext *tc, AstNode *node) {
     const char *name = node->as.struct_decl.name;
     size_t count = node->as.struct_decl.fields.count;
@@ -1153,7 +1270,7 @@ static void tc_program(TCContext *tc, AstNode *program) {
                               decl->loc.line, decl->loc.col);
                 break;
             }
-            case NODE_IMPORT:       break;
+            case NODE_IMPORT:       tc_import(tc, decl); break;
             case NODE_LINK:         break;
             default:                break;
         }

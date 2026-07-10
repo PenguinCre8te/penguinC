@@ -1,0 +1,7 @@
+#import "./tests/helpers/mathutils.pc" as math
+#import std.console.*
+int main() {
+    println_int(math.square(7));
+    println_int(math.add(10, 20));
+    return 0;
+}

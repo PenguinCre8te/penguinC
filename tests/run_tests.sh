@@ -109,7 +109,7 @@ echo ""
 if [ ${#TESTS[@]} -gt 0 ]; then
     SEQ="${TESTS[*]}"
 else
-    SEQ=$(seq 1 39)
+    SEQ=$(seq 1 49)
 fi
 
 PIDS=()

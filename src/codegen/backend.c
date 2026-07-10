@@ -54,7 +54,7 @@ static void emit_object_file(LLVMTargetMachineRef tm, LLVMModuleRef module, cons
 }
 
 int codegen(AstNode *program, const char *output_file, OptLevel opt,
-            LinkPaths *out_links) {
+            LinkPaths *out_links, int debug_enabled) {
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
@@ -76,13 +76,18 @@ int codegen(AstNode *program, const char *output_file, OptLevel opt,
         .labels = NULL, .label_count = 0, .label_cap = 0,
         .loop_depth = 0,
         .scope_base = 0,
+        .debug_enabled = debug_enabled,
+        .dibuilder = NULL, .dicu = NULL, .difile = NULL, .discope = NULL,
     };
 
     init_arc_types(&cg);
+    debug_init(&cg, output_file);
 
     codegen_program(&cg, program);
 
     codegen_arc_optimize(module);
+
+    debug_finalize(&cg);
 
     char *verify_err = NULL;
     LLVMVerifyModule(module, LLVMReturnStatusAction, &verify_err);
@@ -132,6 +137,7 @@ int codegen(AstNode *program, const char *output_file, OptLevel opt,
     free(cg.imports);
 
     LLVMDisposeBuilder(builder);
+    if (cg.dibuilder) LLVMDisposeDIBuilder(cg.dibuilder);
     LLVMDisposeModule(module);
     LLVMContextDispose(ctx);
 

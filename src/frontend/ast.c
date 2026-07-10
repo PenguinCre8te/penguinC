@@ -50,6 +50,10 @@ AstNode *ast_new_import(SrcLoc loc, const char *mod, int is_header) {
     n->as.import.is_header = is_header;
     nodelist_init(&n->as.import.func_maps);
     nodelist_init(&n->as.import.links);
+    n->as.import.alias = NULL;
+    n->as.import.wildcard = 0;
+    nodelist_init(&n->as.import.selected_names);
+    n->as.import.submodule = NULL;
     return n;
 }
 

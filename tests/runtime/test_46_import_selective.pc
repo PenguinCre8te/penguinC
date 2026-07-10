@@ -1,0 +1,6 @@
+#import std.console.(println, println_int)
+int main() {
+    println("selective import");
+    println_int(99);
+    return 0;
+}

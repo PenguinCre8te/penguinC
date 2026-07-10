@@ -7,7 +7,8 @@ FRONTEND = src/frontend/ast.c src/frontend/lexer.c src/frontend/parser.c \
            src/frontend/typecheck.c src/frontend/printast.c
 CODEGEN  = src/codegen/ctx.c src/codegen/arc.c src/codegen/mangle.c \
            src/codegen/type.c src/codegen/import.c src/codegen/expr.c \
-           src/codegen/stmt.c src/codegen/decl.c src/codegen/backend.c
+           src/codegen/stmt.c src/codegen/decl.c src/codegen/codegen_debug.c \
+           src/codegen/backend.c
 ROOT     = src/error.c src/main.c
 SRC      = $(FRONTEND) $(CODEGEN) $(ROOT)
 OBJ      = $(patsubst src/%.c,src/build/%.o,$(SRC))
