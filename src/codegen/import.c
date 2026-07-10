@@ -75,33 +75,11 @@ static void register_func_map(CodegenCtx *cg, AstNode *fm, const char *mod_name)
     snprintf(qualified, sizeof(qualified), "%s.%s", mod_name, fm->as.func_map.pc_name);
     func_map_push(cg, qualified, fm->as.func_map.c_name);
 
-    {
+    /* Register simple-name lookup: module.funcname */
+    if (fm->as.func_map.orig_name) {
         char simple[512];
-        const char *mn = fm->as.func_map.pc_name;
-        const char *start = mn;
-        if (strncmp(start, "_pC", 3) == 0) start += 3;
-        const char *name_end = start;
-        while (*name_end) {
-            char c = *name_end;
-            int is_suffix = (c == 'i' || c == 'f' || c == 'b' || c == 's' || c == 'v' || c == 'p');
-            if (is_suffix) {
-                char next = name_end[1];
-                if (next == '\0' || (!(next >= 'a' && next <= 'z') &&
-                                     !(next >= 'A' && next <= 'Z') &&
-                                     !(next >= '0' && next <= '9') &&
-                                     next != '_'))
-                    break;
-            }
-            name_end++;
-        }
-        size_t nlen = name_end - start;
-        if (nlen > 0 && nlen < 256) {
-            char name_buf[256];
-            memcpy(name_buf, start, nlen);
-            name_buf[nlen] = '\0';
-            snprintf(simple, sizeof(simple), "%s.%s", mod_name, name_buf);
-            func_map_push(cg, simple, fm->as.func_map.c_name);
-        }
+        snprintf(simple, sizeof(simple), "%s.%s", mod_name, fm->as.func_map.orig_name);
+        func_map_push(cg, simple, fm->as.func_map.c_name);
     }
 
     if (fm->as.func_map.ret_type) {

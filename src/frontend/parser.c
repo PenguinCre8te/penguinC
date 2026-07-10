@@ -1098,6 +1098,7 @@ static AstNode *parse_header_file(const char *filepath) {
 
                     /* Store the mangled name as pc_name with type info */
                     AstNode *fm = ast_new_func_map(loc, mangled, c_name);
+                    fm->as.func_map.orig_name = strdup(func_name);
                     fm->as.func_map.ret_type = strdup(ret_type);
                     fm->as.func_map.param_count = param_count;
                     if (param_count > 0) {

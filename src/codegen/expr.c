@@ -1,4 +1,49 @@
 #include "codegen_internal.h"
+#include <stdio.h>
+
+static const char *llvm_type_name(LLVMTypeRef ty) {
+    if (!ty) return "?";
+    switch (LLVMGetTypeKind(ty)) {
+        case LLVMIntegerTypeKind:
+            return LLVMGetIntTypeWidth(ty) == 1 ? "bool" :
+                   LLVMGetIntTypeWidth(ty) == 64 ? "long" : "int";
+        case LLVMDoubleTypeKind:    return "float";
+        case LLVMVoidTypeKind:      return "void";
+        case LLVMPointerTypeKind:   return "string";
+        default:                    return "?";
+    }
+}
+
+static int validate_call_args(CodegenCtx *cg, AstNode *node,
+                              const char *fn_name, LLVMTypeRef fn_type) {
+    if (!fn_type) return 0;
+    unsigned expected = LLVMCountParamTypes(fn_type);
+    unsigned got = (unsigned)node->as.call.args.count;
+    if (expected != got) {
+        error_at(node->loc, ERR_SEMANTIC,
+            "'%s' expects %u argument(s), got %u", fn_name, expected, got);
+        return 1;
+    }
+    LLVMTypeRef *param_tys = malloc(expected * sizeof(LLVMTypeRef));
+    LLVMGetParamTypes(fn_type, param_tys);
+    for (unsigned i = 0; i < expected; i++) {
+        AstNode *arg = node->as.call.args.items[i];
+        LLVMValueRef arg_val = codegen_expr(cg, arg);
+        if (!arg_val) continue;
+        LLVMTypeRef actual = LLVMTypeOf(arg_val);
+        if (actual != param_tys[i]) {
+            error_at(arg->loc, ERR_SEMANTIC,
+                "argument %u of '%s' expects %s, got %s",
+                i + 1, fn_name,
+                llvm_type_name(param_tys[i]),
+                llvm_type_name(actual));
+            free(param_tys);
+            return 1;
+        }
+    }
+    free(param_tys);
+    return 0;
+}
 
 LLVMValueRef get_or_declare_runtime_fn(CodegenCtx *cg, const char *name,
                                        LLVMTypeRef fn_type) {
@@ -490,9 +535,16 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                      obj->as.ident.name, member);
 
             const char *c_name = func_map_lookup(cg, qualified_mangled);
+            int mangled_match = (c_name != NULL);
             if (!c_name) c_name = func_map_lookup(cg, qualified);
 
             if (c_name) {
+                /* If unmangled matched but mangled didn't, args may be wrong */
+                if (!mangled_match) {
+                    LLVMTypeRef check_ft = fn_type_lookup(cg, c_name);
+                    if (check_ft && validate_call_args(cg, node, qualified, check_ft))
+                        return NULL;
+                }
                 callee = LLVMGetNamedFunction(cg->module, c_name);
                 callee_fn_type = fn_type_lookup(cg, c_name);
                 if (!callee_fn_type) {
@@ -552,7 +604,11 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
             }
             if (!callee) {
                 callee = LLVMGetNamedFunction(cg->module, ident_name);
-                if (callee) callee_fn_type = fn_type_lookup(cg, ident_name);
+                if (callee) {
+                    callee_fn_type = fn_type_lookup(cg, ident_name);
+                    if (callee_fn_type && validate_call_args(cg, node, ident_name, callee_fn_type))
+                        return NULL;
+                }
             }
         }
     } else {
