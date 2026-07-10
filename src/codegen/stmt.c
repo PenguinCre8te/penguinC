@@ -414,8 +414,35 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
     /* Determine the type name of the resource for method dispatch */
     const char *type_name = NULL;
     AstNode *res = node->as.using_stmt.resource;
-    if (res->type == NODE_IDENTIFIER) {
-        type_name = var_lookup_type_name(cg, res->as.ident.name);
+
+    /* Unwrap call: files.open(...) → callee is Member(Ident("files"), "open") */
+    AstNode *unwrap = res;
+    if (unwrap->type == NODE_CALL && unwrap->as.call.callee)
+        unwrap = unwrap->as.call.callee;
+
+    if (unwrap->type == NODE_IDENTIFIER) {
+        type_name = var_lookup_type_name(cg, unwrap->as.ident.name);
+    } else if (unwrap->type == NODE_MEMBER) {
+        AstNode *obj = unwrap->as.member.object;
+        if (obj->type == NODE_IDENTIFIER) {
+            const char *mod_name = obj->as.ident.name;
+            for (size_t i = 0; i < cg->func_map_count; i++) {
+                const char *key = cg->func_maps[i].pc_name;
+                if (strncmp(key, mod_name, strlen(mod_name)) == 0 &&
+                    key[strlen(mod_name)] == '.') {
+                    const char *rest = key + strlen(mod_name) + 1;
+                    const char *dot2 = strchr(rest, '.');
+                    if (dot2) {
+                        size_t class_len = dot2 - rest;
+                        char class_type[512];
+                        snprintf(class_type, sizeof(class_type), "%s.%.*s",
+                                 mod_name, (int)class_len, rest);
+                        type_name = strdup(class_type);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
@@ -426,6 +453,8 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
         LLVMValueRef alloca = LLVMBuildAlloca(cg->builder, i64_ty, node->as.using_stmt.var_name);
         LLVMBuildStore(cg->builder, resource, alloca);
         var_push(cg, node->as.using_stmt.var_name, alloca, i64_ty);
+        if (type_name)
+            var_set_type_name(cg, node->as.using_stmt.var_name, type_name);
     }
 
     /* Call enter() on the resource if type info available */
@@ -440,7 +469,9 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
 
         if (enter_c) {
             LLVMValueRef enter_fn = LLVMGetNamedFunction(cg->module, enter_c);
-            LLVMTypeRef enter_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
+            LLVMTypeRef enter_ft = fn_type_lookup(cg, enter_c);
+            if (!enter_ft)
+                enter_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
             if (!enter_fn)
                 enter_fn = get_or_declare_runtime_fn(cg, enter_c, enter_ft);
             LLVMBuildCall2(cg->builder, enter_ft, enter_fn, &resource, 1, "");
@@ -462,7 +493,9 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
 
         if (exit_c) {
             LLVMValueRef exit_fn = LLVMGetNamedFunction(cg->module, exit_c);
-            LLVMTypeRef exit_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
+            LLVMTypeRef exit_ft = fn_type_lookup(cg, exit_c);
+            if (!exit_ft)
+                exit_ft = LLVMFunctionType(void_ty, (LLVMTypeRef[]){i64_ty}, 1, 0);
             if (!exit_fn)
                 exit_fn = get_or_declare_runtime_fn(cg, exit_c, exit_ft);
             LLVMBuildCall2(cg->builder, exit_ft, exit_fn, &resource, 1, "");

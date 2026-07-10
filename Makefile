@@ -4,7 +4,7 @@ LLVM_LDFLAGS = $(shell llvm-config --ldflags --libs core native --system-libs 2>
 CFLAGS   = -Wall -Wextra -std=c11 -g -Isrc -Isrc/frontend -Isrc/codegen $(LLVM_CFLAGS)
 
 FRONTEND = src/frontend/ast.c src/frontend/lexer.c src/frontend/parser.c \
-           src/frontend/typecheck.c
+           src/frontend/typecheck.c src/frontend/printast.c
 CODEGEN  = src/codegen/ctx.c src/codegen/arc.c src/codegen/mangle.c \
            src/codegen/type.c src/codegen/import.c src/codegen/expr.c \
            src/codegen/stmt.c src/codegen/decl.c src/codegen/backend.c

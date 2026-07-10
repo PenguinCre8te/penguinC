@@ -910,9 +910,10 @@ static AstNode *parse_header_file(const char *filepath) {
                             char *close_paren = strchr(args_str, ')');
                             if (close_paren) *close_paren = '\0';
 
-                            /* Extract return type - look for '->' after closing paren */
+                            /* Extract return type - try '->' after paren, else before method name */
                             char ret_type[256] = "void";
                             {
+                                /* Try '-> ret_type' after closing paren first */
                                 char *after_args = close_paren ? close_paren + 1 : args_str;
                                 char *arrow2 = strstr(after_args, "->");
                                 if (arrow2) {
@@ -925,6 +926,15 @@ static AstNode *parse_header_file(const char *filepath) {
                                     size_t rt_len = rt_end - rt_start;
                                     if (rt_len > 0 && rt_len < sizeof(ret_type)) {
                                         memcpy(ret_type, rt_start, rt_len);
+                                        ret_type[rt_len] = '\0';
+                                    }
+                                } else {
+                                    /* Fallback: extract from text before method name */
+                                    size_t rt_len = name_start - decl;
+                                    while (rt_len > 0 && (decl[rt_len-1] == ' ' || decl[rt_len-1] == '\t'))
+                                        rt_len--;
+                                    if (rt_len > 0 && rt_len < sizeof(ret_type)) {
+                                        memcpy(ret_type, decl, rt_len);
                                         ret_type[rt_len] = '\0';
                                     }
                                 }

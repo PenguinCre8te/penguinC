@@ -440,14 +440,17 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
 
                 if (c_name) {
                     LLVMValueRef callee_fn = LLVMGetNamedFunction(cg->module, c_name);
-                    LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
-                    size_t total_ac = node->as.call.args.count + 1;
-                    LLVMTypeRef *argt = malloc(total_ac * sizeof(LLVMTypeRef));
-                    argt[0] = i64_ty;
-                    for (size_t i = 1; i < total_ac; i++) argt[i] = i64_ty;
-                    LLVMTypeRef callee_ft = LLVMFunctionType(i64_ty, argt, (unsigned)total_ac, 0);
-                    free(argt);
+                    LLVMTypeRef callee_ft = fn_type_lookup(cg, c_name);
                     if (!callee_fn) {
+                        if (!callee_ft) {
+                            LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+                            size_t total_ac = node->as.call.args.count + 1;
+                            LLVMTypeRef *argt = malloc(total_ac * sizeof(LLVMTypeRef));
+                            argt[0] = i64_ty;
+                            for (size_t i = 1; i < total_ac; i++) argt[i] = i64_ty;
+                            callee_ft = LLVMFunctionType(i64_ty, argt, (unsigned)total_ac, 0);
+                            free(argt);
+                        }
                         callee_fn = get_or_declare_runtime_fn(cg, c_name, callee_ft);
                     }
                     size_t user_argc = node->as.call.args.count;

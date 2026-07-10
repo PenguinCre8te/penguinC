@@ -1,17 +1,9 @@
 #import std.console
 #import std.files
 
-// long main() {
-//     mut long f = files.open("./test.txt", 1)
-//     console.println(f.toS())
-//     long n = files.file.writeStr(f, "hello")
-//     console.println(n.toS())
-//     files.file.flush(f)
-//     files.file.exit(f)
-// }
-
 long main() {
-    using(files.open("./test.txt", 1) as f) {
-        f.write("penguin")
+    using(files.open("./test.txt", "wrong argument") as f) {
+        string answer = console.input()
+        f.writeStr(answer)
     }
 }

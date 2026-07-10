@@ -40,6 +40,11 @@ long files_open(const char *path, long mode) {
     return (long)(intptr_t)h;
 }
 
+/* No-op enter (file already opened by files_open) */
+long files_enter(long handle) {
+    return handle;
+}
+
 /* Close a file. */
 void files_close(long handle) {
     FileHandle *h = (FileHandle *)(intptr_t)handle;
