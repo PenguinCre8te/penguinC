@@ -6,10 +6,10 @@ int compute(long n) {
 }
 
 int main() {
-    threads.thread t1 = threads.run(compute, 5);
-    threads.thread t2 = threads.run(compute, 7);
-    threads.thread t3 = threads.run(compute, 3);
-    threads.thread t4 = threads.run(compute, 10);
+    threads.Thread t1 = threads.run(compute, 5);
+    threads.Thread t2 = threads.run(compute, 7);
+    threads.Thread t3 = threads.run(compute, 3);
+    threads.Thread t4 = threads.run(compute, 10);
     long r1 = t1.get();
     long r2 = t2.get();
     long r3 = t3.get();

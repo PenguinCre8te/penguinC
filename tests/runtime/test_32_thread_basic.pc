@@ -7,7 +7,7 @@ int worker() {
 }
 
 int main() {
-    threads.thread t = threads.run(worker);
+    threads.Thread t = threads.run(worker);
     console.print("main running\n");
     t.join();
     long result = t.get();

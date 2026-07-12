@@ -16,8 +16,8 @@ long increment() {
 
 int main() {
     m = mutex.create()
-    threads.thread t1 = threads.run(increment)
-    threads.thread t2 = threads.run(increment)
+    threads.Thread t1 = threads.run(increment)
+    threads.Thread t2 = threads.run(increment)
     t1.get()
     t2.get()
     console.println_int(counter)

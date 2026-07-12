@@ -1,6 +1,6 @@
 #link "./threads.o";
 
-class thread {
+class Thread {
     void join() => thread_join;
     long get() => thread_get;
 }

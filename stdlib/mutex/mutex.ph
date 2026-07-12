@@ -1,7 +1,7 @@
 #link "./mutex.o";
 #link "pthread";
 
-class mutex {
+class Mutex {
     void enter() => mutex_enter;
     void exit() => mutex_exit;
     long tryEnter() => mutex_try_enter;

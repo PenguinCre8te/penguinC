@@ -7,9 +7,9 @@ int square(long n) {
 
 int main() {
     mut long sum = 0;
-    threads.thread t1 = threads.run(square, 1);
-    threads.thread t2 = threads.run(square, 2);
-    threads.thread t3 = threads.run(square, 3);
+    threads.Thread t1 = threads.run(square, 1);
+    threads.Thread t2 = threads.run(square, 2);
+    threads.Thread t3 = threads.run(square, 3);
     sum = sum + t1.get();
     sum = sum + t2.get();
     sum = sum + t3.get();

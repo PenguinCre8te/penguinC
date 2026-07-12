@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 
 typedef struct {
-    _Atomic uint64_t refcount;
+    _Atomic size_t refcount;
 } ArcHeader;
 
 void *arc_alloc(size_t size) {

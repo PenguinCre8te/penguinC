@@ -14,9 +14,9 @@ int add_three() {
 }
 
 int main() {
-    threads.thread t1 = threads.run(add_one);
-    threads.thread t2 = threads.run(add_two);
-    threads.thread t3 = threads.run(add_three);
+    threads.Thread t1 = threads.run(add_one);
+    threads.Thread t2 = threads.run(add_two);
+    threads.Thread t3 = threads.run(add_three);
     long r1 = t1.get();
     long r2 = t2.get();
     long r3 = t3.get();

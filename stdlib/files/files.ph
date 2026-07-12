@@ -4,7 +4,7 @@
 long open(string path, long mode) => files_open
 
 # File class with resource management
-class file {
+class File {
     long enter(long self) => files_enter
     void exit(long self) => files_close
     long read(long self, long buf, long count) => files_read

@@ -1,5 +1,12 @@
 #import std.console.(print, input)
 
-long main() {
-    print(input())
+class Penguin {
+    void init() {
+        print("new")
+    }
+}
+
+int main(){
+    Penguin p = new Penguin();
+    print("penguin\n")
 }
