@@ -43,11 +43,13 @@ static void print_usage(void) {
         "  --version      Print version\n"
         "  --help         Print this help\n"
         "  --print-ast    Print the AST\n"
+        "  --print-llvm   Print LLVM IR to stdout\n"
     );
 }
 
 int main(int argc, char **argv) {
     int printast = 0;
+    int print_llvm = 0;
     if (argc < 2) {
         print_usage();
         return 1;
@@ -83,6 +85,8 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(argv[i], "--print-ast") == 0) {
             printast = 1;
+        } else if (strcmp(argv[i], "--print-llvm") == 0) {
+            print_llvm = 1;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage();
             return 0;
@@ -126,7 +130,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    codegen(ast, output_file, opt, &links, debug_enabled);
+    codegen(ast, output_file, opt, &links, debug_enabled, print_llvm);
 
     /* Auto-link when not compile-only: use resolved link paths */
     if (!compile_only && links.count > 0) {

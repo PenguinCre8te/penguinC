@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 
 typedef struct {
-    _Atomic size_t refcount;
+    size_t refcount;
 } ArcHeader;
 
 void *arc_alloc(size_t size) {
@@ -49,7 +49,7 @@ char *arc_wrap_string(const char *s) {
 void *arc_retain_shared(void *ptr) {
     if (ptr) {
         ArcHeader *h = (ArcHeader *)ptr - 1;
-        atomic_fetch_add(&h->refcount, 1);
+        atomic_fetch_add((_Atomic size_t *)&h->refcount, 1);
     }
     return ptr;
 }
@@ -57,7 +57,7 @@ void *arc_retain_shared(void *ptr) {
 void arc_release_shared(void *ptr) {
     if (ptr) {
         ArcHeader *h = (ArcHeader *)ptr - 1;
-        if (atomic_fetch_sub(&h->refcount, 1) == 1) {
+        if (atomic_fetch_sub((_Atomic size_t *)&h->refcount, 1) == 1) {
             free(h);
         }
     }

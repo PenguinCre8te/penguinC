@@ -54,7 +54,7 @@ static void emit_object_file(LLVMTargetMachineRef tm, LLVMModuleRef module, cons
 }
 
 int codegen(AstNode *program, const char *output_file, OptLevel opt,
-            LinkPaths *out_links, int debug_enabled) {
+            LinkPaths *out_links, int debug_enabled, int print_llvm) {
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
@@ -96,6 +96,12 @@ int codegen(AstNode *program, const char *output_file, OptLevel opt,
         LLVMDisposeMessage(verify_err);
     } else if (verify_err) {
         LLVMDisposeMessage(verify_err);
+    }
+
+    if (print_llvm) {
+        char *ir = LLVMPrintModuleToString(module);
+        printf("%s", ir);
+        LLVMDisposeMessage(ir);
     }
 
     LLVMTargetMachineRef tm = create_target_machine(module, opt);

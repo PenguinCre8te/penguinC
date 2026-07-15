@@ -1,12 +1,29 @@
-#import std.console.(print, input)
+class LinkedListNode {
+    linkedListNode next = null
+    int value
 
-class Penguin {
-    void init() {
-        print("new")
+    // Constructor to initialize a node
+    void init(int val) {
+        self.value = val
+    }
+
+    void append(int val) {
+        linkedListNode current = self
+        // Traverse to the last node
+        while (current.next != null) {
+            current = current.next
+        }
+        // Create the new node
+        current.next = new LinkedListNode()
+        current.next.init(val)
     }
 }
 
-int main(){
-    Penguin p = new Penguin();
-    print("penguin\n")
+int main() {
+    // Initialize the head of the list
+    linkedListNode list = new LinkedListNode()
+    list.init(0) // Usually the head holds a dummy value or the first element
+    
+    list.append(10)
+    list.append(20)
 }

@@ -18,8 +18,10 @@ int main() {
     m = mutex.create()
     threads.Thread t1 = threads.run(increment)
     threads.Thread t2 = threads.run(increment)
+    threads.Thread t3 = threads.run(increment)
     t1.get()
     t2.get()
+    t3.get()
     console.println_int(counter)
     mutex.destroy(m)
     return 0;

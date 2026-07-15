@@ -79,6 +79,24 @@ void mangle_call_name(char *buf, size_t buflen, const char *name,
                 } else if (strcmp(m, "toF") == 0) { buf[pos++] = 'f'; continue;
                 } else if (strcmp(m, "toB") == 0) { buf[pos++] = 'b'; continue; }
             }
+            /* Determine return type of the called function for mangling */
+            if (a->as.call.callee->type == NODE_IDENTIFIER) {
+                const char *cname = func_map_lookup(cg, a->as.call.callee->as.ident.name);
+                if (cname) {
+                    LLVMTypeRef fty = fn_type_lookup(cg, cname);
+                    if (fty) {
+                        LLVMTypeRef ret = LLVMGetReturnType(fty);
+                        switch (LLVMGetTypeKind(ret)) {
+                            case LLVMIntegerTypeKind:
+                                if (LLVMGetIntTypeWidth(ret) == 1) { buf[pos++] = 'b'; continue; }
+                                buf[pos++] = 'i'; continue;
+                            case LLVMDoubleTypeKind:  buf[pos++] = 'f'; continue;
+                            case LLVMPointerTypeKind: buf[pos++] = 's'; continue;
+                            default: break;
+                        }
+                    }
+                }
+            }
             buf[pos++] = 'i';
         } else if (a->type == NODE_FSTRING) {
             buf[pos++] = 's';

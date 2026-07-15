@@ -515,6 +515,9 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
 
     LLVMValueRef callee = NULL;
     LLVMTypeRef callee_fn_type = NULL;
+    int pre_evaluated_args = 0;
+    size_t argc = node->as.call.args.count;
+    LLVMValueRef *args = NULL;
 
     if (node->as.call.callee->type == NODE_MEMBER) {
         AstNode *obj = node->as.call.callee->as.member.object;
@@ -593,21 +596,58 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         } else {
             static const char *type_chars[] = {"i", "f", "s", "b"};
             size_t argc = node->as.call.args.count;
-            for (size_t try_idx = 0; try_idx < 4 && !callee; try_idx++) {
-                char try_name[512];
-                size_t p = 0;
-                p += snprintf(try_name + p, sizeof(try_name) - p, "_pC%s", ident_name);
-                for (size_t a = 0; a < argc; a++)
-                    p += snprintf(try_name + p, sizeof(try_name) - p, "%s", type_chars[try_idx]);
-                callee = LLVMGetNamedFunction(cg->module, try_name);
-                if (callee) callee_fn_type = fn_type_lookup(cg, try_name);
+
+            /* Evaluate arguments early so we can match overload types */
+            LLVMValueRef *arg_vals = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
+            for (size_t i = 0; i < argc; i++)
+                arg_vals[i] = codegen_expr(cg, node->as.call.args.items[i]);
+
+            /* Try all mangled overloads, pick the best type-compatible one */
+            {
+                int best_score = -1;
+                for (size_t try_idx = 0; try_idx < 4; try_idx++) {
+                    char try_name[512];
+                    size_t p = 0;
+                    p += snprintf(try_name + p, sizeof(try_name) - p, "_pC%s", ident_name);
+                    for (size_t a = 0; a < argc; a++)
+                        p += snprintf(try_name + p, sizeof(try_name) - p, "%s", type_chars[try_idx]);
+                    LLVMValueRef fn = LLVMGetNamedFunction(cg->module, try_name);
+                    if (!fn) continue;
+                    LLVMTypeRef fn_ty = fn_type_lookup(cg, try_name);
+                    if (!fn_ty) continue;
+                    unsigned param_count = LLVMCountParamTypes(fn_ty);
+                    if (param_count != argc) continue;
+                    LLVMTypeRef *param_tys = malloc(param_count * sizeof(LLVMTypeRef));
+                    LLVMGetParamTypes(fn_ty, param_tys);
+                    int score = 0;
+                    int compatible = 1;
+                    for (unsigned a = 0; a < argc; a++) {
+                        LLVMTypeRef actual = arg_vals ? LLVMTypeOf(arg_vals[a]) : NULL;
+                        if (!actual || param_tys[a] == actual)
+                            score += 3;
+                        else if (LLVMGetTypeKind(param_tys[a]) == LLVMPointerTypeKind &&
+                                 LLVMGetTypeKind(actual) == LLVMPointerTypeKind)
+                            score += 2;
+                        else
+                            compatible = 0;
+                    }
+                    free(param_tys);
+                    if (compatible && score > best_score) {
+                        best_score = score;
+                        callee = fn;
+                        callee_fn_type = fn_ty;
+                    }
+                }
             }
+
             if (!callee) {
                 callee = LLVMGetNamedFunction(cg->module, ident_name);
                 if (callee) {
                     callee_fn_type = fn_type_lookup(cg, ident_name);
-                    if (callee_fn_type && validate_call_args(cg, node, ident_name, callee_fn_type))
+                    if (callee_fn_type && validate_call_args(cg, node, ident_name, callee_fn_type)) {
+                        if (arg_vals) free(arg_vals);
                         return NULL;
+                    }
                 }
             }
             if (!callee) {
@@ -616,15 +656,21 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                 if (c_name) {
                     callee_fn_type = fn_type_lookup(cg, c_name);
                     if (!callee_fn_type) {
-                        size_t ac = node->as.call.args.count;
                         LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
-                        LLVMTypeRef *argt = ac > 0 ? malloc(ac * sizeof(LLVMTypeRef)) : NULL;
-                        for (size_t i = 0; i < ac; i++) argt[i] = i8ptr;
-                        callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)ac, 0);
+                        LLVMTypeRef *argt = argc > 0 ? malloc(argc * sizeof(LLVMTypeRef)) : NULL;
+                        for (size_t i = 0; i < argc; i++) argt[i] = i8ptr;
+                        callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)argc, 0);
                         if (argt) free(argt);
                     }
                     callee = get_or_declare_runtime_fn(cg, c_name, callee_fn_type);
                 }
+            }
+
+            /* If args were pre-evaluated, use them (skip re-evaluation below) */
+            if (arg_vals) {
+                if (args) free(args);
+                args = arg_vals;
+                pre_evaluated_args = 1;
             }
         }
     } else {
@@ -637,10 +683,11 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         return NULL;
     }
 
-    size_t argc = node->as.call.args.count;
-    LLVMValueRef *args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
-    for (size_t i = 0; i < argc; i++)
-        args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+    if (!pre_evaluated_args) {
+        args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
+        for (size_t i = 0; i < argc; i++)
+            args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+    }
 
     {
         const char *cname = callee ? LLVMGetValueName(callee) : NULL;

@@ -16,6 +16,6 @@ typedef struct {
 } LinkPaths;
 
 int codegen(AstNode *program, const char *output_file, OptLevel opt,
-            LinkPaths *out_links, int debug_enabled);
+            LinkPaths *out_links, int debug_enabled, int print_llvm);
 
 #endif /* PENGUINC_CODEGEN_H */
