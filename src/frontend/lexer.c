@@ -351,6 +351,7 @@ static Token next_token(Lexer *lex) {
         case '#':  return make_token_with_value(lex, TOK_HASH, "#", 1);
         case '~':  return make_token_with_value(lex, TOK_TILDE, "~", 1);
         case '?':  return make_token_with_value(lex, TOK_QUESTION, "?", 1);
+        case '@':  return make_token_with_value(lex, TOK_AT, "@", 1);
         default:
             error_at((SrcLoc){lex->filename, start_line, start_col},
                      ERR_LEXER, "unexpected character '%c'", c);
@@ -487,6 +488,7 @@ const char *token_type_name(TokenType type) {
         case TOK_FAT_ARROW:    return "'=>'";
         case TOK_DOTDOT:       return "'..'";
         case TOK_HASH:         return "'#'";
+        case TOK_AT:           return "'@'";
         case TOK_SEMICOLON_DEF: return "';'";
         case TOK_IMPORT:       return "'import'";
         case TOK_LINK:         return "'link'";

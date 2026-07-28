@@ -3,7 +3,7 @@
 #import std.mutex;
 
 shared mut long counter = 0
-mut mutex.mutex m = 0
+mut mutex.Mutex m = 0
 
 long increment() {
     for i in 0..1000000 {

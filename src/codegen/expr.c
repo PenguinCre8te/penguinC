@@ -666,6 +666,196 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                 }
             }
 
+            /* Try to find a generic function template and call it directly */
+            if (!callee) {
+                AstNode *tmpl = generic_func_lookup(cg, ident_name);
+                if (tmpl) {
+                    if (tmpl->as.func_decl.generic_dispatch == 0) {
+                        /* Static dispatch: call the i8* version with inttoptr/ptrtoint casts */
+                        char gen_mangled[512];
+                        mangle_name(gen_mangled, sizeof(gen_mangled), ident_name,
+                                    &tmpl->as.func_decl.params, tmpl->as.func_decl.params.count);
+                        callee = LLVMGetNamedFunction(cg->module, gen_mangled);
+                        if (callee) {
+                            callee_fn_type = fn_type_lookup(cg, gen_mangled);
+                            if (!callee_fn_type) {
+                                LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                LLVMTypeRef *argt = argc > 0 ? malloc(argc * sizeof(LLVMTypeRef)) : NULL;
+                                for (size_t i = 0; i < argc; i++) argt[i] = i8ptr;
+                                callee_fn_type = LLVMFunctionType(i8ptr, argt, (unsigned)argc, 0);
+                                if (argt) free(argt);
+                            }
+                            /* Evaluate args and cast to i8* for static generic function */
+                            args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
+                            for (size_t i = 0; i < argc; i++)
+                                args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+                            pre_evaluated_args = 1;
+                            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                            unsigned param_count = LLVMCountParams(callee);
+                            LLVMTypeRef *param_tys = param_count > 0 ? malloc(param_count * sizeof(LLVMTypeRef)) : NULL;
+                            if (param_tys) LLVMGetParamTypes(callee_fn_type, param_tys);
+                            for (size_t i = 0; i < argc && i < param_count; i++) {
+                                if (!param_tys) break;
+                                LLVMTypeRef actual_ty = LLVMTypeOf(args[i]);
+                                if (LLVMGetTypeKind(actual_ty) == LLVMIntegerTypeKind &&
+                                    LLVMGetTypeKind(param_tys[i]) == LLVMPointerTypeKind) {
+                                    args[i] = LLVMBuildIntToPtr(cg->builder, args[i], i8ptr, "gen.inttoptr");
+                                } else if (LLVMGetTypeKind(actual_ty) == LLVMDoubleTypeKind &&
+                                           LLVMGetTypeKind(param_tys[i]) == LLVMPointerTypeKind) {
+                                    LLVMTypeRef i64 = LLVMInt64TypeInContext(cg->ctx);
+                                    args[i] = LLVMBuildBitCast(cg->builder, args[i], i64, "gen.f2i");
+                                    args[i] = LLVMBuildIntToPtr(cg->builder, args[i], i8ptr, "gen.inttoptr");
+                                } else if (LLVMGetTypeKind(actual_ty) == LLVMPointerTypeKind &&
+                                           LLVMGetTypeKind(param_tys[i]) == LLVMPointerTypeKind) {
+                                    /* pointer to pointer — ok */
+                                }
+                            }
+                            if (param_tys) free(param_tys);
+                            /* Free pre-evaluated args since we built our own; null to skip fallthrough */
+                            free(arg_vals);
+                            arg_vals = NULL;
+                        }
+                    } else {
+                        /* Dynamic dispatch: monomorphize with concrete types */
+                        /* Determine concrete types from argument values */
+                        args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
+                        for (size_t i = 0; i < argc; i++)
+                            args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+                        pre_evaluated_args = 1;
+
+                        size_t gp_count = tmpl->as.func_decl.generic_count;
+                        LLVMTypeRef *concrete_types = gp_count > 0 ? malloc(gp_count * sizeof(LLVMTypeRef)) : NULL;
+                        for (size_t g = 0; g < gp_count; g++)
+                            concrete_types[g] = NULL;
+
+                        /* Map argument types to generic parameters */
+                        for (size_t a = 0; a < argc && a < tmpl->as.func_decl.params.count; a++) {
+                            const char *param_type = tmpl->as.func_decl.params.items[a]->as.param.type;
+                            for (size_t g = 0; g < gp_count; g++) {
+                                if (strcmp(param_type, tmpl->as.func_decl.generic_params[g]) == 0) {
+                                    if (concrete_types[g] == NULL && a < argc)
+                                        concrete_types[g] = LLVMTypeOf(args[a]);
+                                    break;
+                                }
+                            }
+                        }
+
+                        /* Build specialized function name */
+                        char spec_name[512];
+                        size_t sp = 0;
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_pC%s", ident_name);
+                        for (size_t g = 0; g < gp_count; g++) {
+                            if (concrete_types[g]) {
+                                if (LLVMGetTypeKind(concrete_types[g]) == LLVMIntegerTypeKind) {
+                                    unsigned w = LLVMGetIntTypeWidth(concrete_types[g]);
+                                    if (w == 1) sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "b");
+                                    else sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "i");
+                                } else if (LLVMGetTypeKind(concrete_types[g]) == LLVMDoubleTypeKind) {
+                                    sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "f");
+                                } else if (LLVMGetTypeKind(concrete_types[g]) == LLVMPointerTypeKind) {
+                                    sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "s");
+                                } else {
+                                    sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "p");
+                                }
+                            } else {
+                                sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "p");
+                            }
+                        }
+
+                        /* Check if already instantiated */
+                        callee = LLVMGetNamedFunction(cg->module, spec_name);
+                        if (!callee) {
+                            /* Build specialized function type with concrete types */
+                            size_t param_count = tmpl->as.func_decl.params.count;
+                            LLVMTypeRef *spec_param_types = param_count > 0 ? malloc(param_count * sizeof(LLVMTypeRef)) : NULL;
+                            for (size_t p = 0; p < param_count; p++) {
+                                const char *ptype = tmpl->as.func_decl.params.items[p]->as.param.type;
+                                spec_param_types[p] = NULL;
+                                for (size_t g = 0; g < gp_count; g++) {
+                                    if (strcmp(ptype, tmpl->as.func_decl.generic_params[g]) == 0) {
+                                        spec_param_types[p] = concrete_types[g];
+                                        break;
+                                    }
+                                }
+                                if (!spec_param_types[p])
+                                    spec_param_types[p] = resolve_type(cg, ptype);
+                            }
+
+                            /* Resolve return type */
+                            const char *ret_type = tmpl->as.func_decl.ret_type;
+                            LLVMTypeRef spec_ret_type = NULL;
+                            for (size_t g = 0; g < gp_count; g++) {
+                                if (strcmp(ret_type, tmpl->as.func_decl.generic_params[g]) == 0) {
+                                    spec_ret_type = concrete_types[g];
+                                    break;
+                                }
+                            }
+                            if (!spec_ret_type)
+                                spec_ret_type = resolve_type(cg, ret_type);
+
+                            LLVMTypeRef spec_fn_type = LLVMFunctionType(spec_ret_type, spec_param_types,
+                                (unsigned)param_count, 0);
+
+                            /* Create the specialized function */
+                            callee = LLVMAddFunction(cg->module, spec_name, spec_fn_type);
+                            fn_type_push(cg, spec_name, spec_fn_type);
+                            callee_fn_type = spec_fn_type;
+
+                            /* Save current builder state */
+                            LLVMValueRef prev_fn = cg->cur_fn;
+                            LLVMBasicBlockRef prev_insert = LLVMGetInsertBlock(cg->builder);
+                            size_t saved_var_count = cg->var_count;
+                            size_t saved_scope_base = cg->scope_base;
+
+                            /* Create entry block */
+                            LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(cg->ctx, callee, "entry");
+                            LLVMPositionBuilderAtEnd(cg->builder, entry);
+
+                            cg->cur_fn = callee;
+                            cg->scope_base = 0;
+
+                            /* Create allocas for parameters */
+                            for (unsigned i = 0; i < (unsigned)param_count; i++) {
+                                LLVMValueRef param = LLVMGetParam(callee, i);
+                                const char *pname = tmpl->as.func_decl.params.items[i]->as.param.name;
+                                LLVMSetValueName2(param, pname, strlen(pname));
+                                LLVMTypeRef pty = LLVMTypeOf(param);
+                                LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, pty, pname);
+                                LLVMBuildStore(cg->builder, param, alloca_inst);
+                                var_push(cg, pname, alloca_inst, pty);
+                                var_set_type_name(cg, pname, tmpl->as.func_decl.params.items[i]->as.param.type);
+                            }
+
+                            /* Generate the body */
+                            codegen_block(cg, tmpl->as.func_decl.body);
+
+                            /* Add implicit return if needed */
+                            if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(cg->builder))) {
+                                if (LLVMGetTypeKind(spec_ret_type) == LLVMVoidTypeKind) {
+                                    LLVMBuildRetVoid(cg->builder);
+                                } else {
+                                    LLVMBuildRet(cg->builder, LLVMConstNull(spec_ret_type));
+                                }
+                            }
+
+                            /* Restore state */
+                            cg->var_count = saved_var_count;
+                            cg->scope_base = saved_scope_base;
+                            cg->cur_fn = prev_fn;
+                            if (prev_insert)
+                                LLVMPositionBuilderAtEnd(cg->builder, prev_insert);
+
+                            if (spec_param_types) free(spec_param_types);
+                        } else {
+                            callee_fn_type = fn_type_lookup(cg, spec_name);
+                        }
+                        if (concrete_types) free(concrete_types);
+                        free(arg_vals);
+                        arg_vals = NULL;
+                    }
+                }
+            }
+
             /* If args were pre-evaluated, use them (skip re-evaluation below) */
             if (arg_vals) {
                 if (args) free(args);

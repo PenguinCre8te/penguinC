@@ -68,6 +68,7 @@ static int is_coercible(TCType from, TCType to) {
     if (types_equal(from, to)) return 1;
     if (from.kind == TC_TYPE_ERROR || to.kind == TC_TYPE_ERROR) return 1;
     if (from.kind == TC_UNKNOWN) return 1;
+    if (to.kind == TC_UNKNOWN) return 1;  /* generic type parameter matches any type */
     if (from.kind == TC_INT && to.kind == TC_FLOAT) return 1;
     if (from.kind == TC_BOOL && to.kind == TC_INT) return 1;
     if (from.kind == TC_FLOAT && to.kind == TC_INT) return 1;
@@ -298,6 +299,12 @@ static TCFuncSig *tc_func_lookup_best(TCContext *tc, const char *name, TCType *a
                 score += 1;
                 continue;
             }
+            /* TC_UNKNOWN (generic type parameter) matches any type */
+            if (tc->funcs[i].param_types[j].kind == TC_UNKNOWN ||
+                arg_types[j].kind == TC_UNKNOWN) {
+                score += 2;
+                continue;
+            }
             if (types_equal(arg_types[j], tc->funcs[i].param_types[j]))
                 score += 3;
             else if (is_coercible(arg_types[j], tc->funcs[i].param_types[j]))
@@ -370,6 +377,22 @@ static TCType resolve_tc_type(TCContext *tc, const char *type_str) {
         return make_pointer_type(inner);
     }
 
+    /* Generic type: Base<T1,T2,...> — resolve the base name */
+    const char *lt = strchr(resolved, '<');
+    if (lt) {
+        size_t base_len = lt - resolved;
+        char base_name[256];
+        if (base_len < sizeof(base_name)) {
+            memcpy(base_name, resolved, base_len);
+            base_name[base_len] = '\0';
+            if (tc_class_lookup(tc, base_name))
+                return make_class_type(base_name);
+            if (tc_struct_lookup(tc, base_name))
+                return make_struct_type(base_name);
+        }
+        /* Fall through to unknown */
+    }
+
     if (strcmp(resolved, "int") == 0 || strcmp(resolved, "long") == 0)
         return make_type(TC_INT);
     if (strcmp(resolved, "float") == 0)
@@ -386,8 +409,21 @@ static TCType resolve_tc_type(TCContext *tc, const char *type_str) {
     if (tc_class_lookup(tc, resolved))
         return make_class_type(resolved);
 
-    if (strchr(resolved, '.'))
-        return make_type(TC_INT);
+    if (strchr(resolved, '.')) {
+        /* Check full dotted name first */
+        if (tc_class_lookup(tc, resolved))
+            return make_class_type(resolved);
+        if (tc_struct_lookup(tc, resolved))
+            return make_struct_type(resolved);
+        /* Check just the class name after the last dot */
+        const char *dot = strrchr(resolved, '.');
+        const char *bare = dot + 1;
+        if (tc_class_lookup(tc, bare))
+            return make_class_type(bare);
+        if (tc_struct_lookup(tc, bare))
+            return make_struct_type(bare);
+        return make_type(TC_UNKNOWN);
+    }
 
     return make_type(TC_UNKNOWN);
 }
@@ -921,6 +957,10 @@ static void tc_var_decl(TCContext *tc, AstNode *node) {
     const char *var_name = node->as.var_decl.name;
     TCType decl_type = resolve_tc_type(tc, type_str);
 
+    if (decl_type.kind == TC_UNKNOWN && type_str && strchr(type_str, '.')) {
+        tc_error(tc, node->loc, "unknown class or module type '%s'", type_str);
+    }
+
     if (node->as.var_decl.init) {
         TCType init_type = tc_expr(tc, node->as.var_decl.init);
         if (decl_type.kind != TC_TYPE_ERROR && init_type.kind != TC_TYPE_ERROR) {
@@ -1116,6 +1156,49 @@ static void tc_import(TCContext *tc, AstNode *node) {
             }
         }
 
+        /* Register imported classes in the typechecker */
+        if (fm && fm->type == NODE_CLASS_DECL) {
+            const char *cls_name = fm->as.class_decl.name;
+            const char *parent = fm->as.class_decl.parent;
+
+            size_t own_count = fm->as.class_decl.fields.count;
+            size_t parent_field_count = 0;
+            TCClassInfo *parent_cls = parent ? tc_class_lookup(tc, parent) : NULL;
+            if (parent_cls) parent_field_count = parent_cls->field_count;
+
+            size_t total = parent_field_count + own_count;
+            char **field_names = total > 0 ? malloc(total * sizeof(char *)) : NULL;
+            TCType *field_types = total > 0 ? malloc(total * sizeof(TCType)) : NULL;
+
+            if (parent_cls) {
+                for (size_t i = 0; i < parent_field_count; i++) {
+                    field_names[i] = strdup(parent_cls->field_names[i]);
+                    field_types[i] = parent_cls->field_types[i];
+                }
+            }
+
+            for (size_t i = 0; i < own_count; i++) {
+                AstNode *f = fm->as.class_decl.fields.items[i];
+                field_names[parent_field_count + i] = strdup(f->as.var_decl.name);
+                field_types[parent_field_count + i] = resolve_tc_type(tc, f->as.var_decl.type);
+            }
+
+            tc_class_push(tc, cls_name, parent, field_names, field_types, total,
+                         node->loc.line, node->loc.col);
+
+            /* Also register under module.ClassName if it's a qualified import */
+            if (!node->as.import.wildcard && !is_local_pc) {
+                char qname[512];
+                snprintf(qname, sizeof(qname), "%s.%s", reg_name, cls_name);
+                /* Don't duplicate if already registered */
+                if (!tc_class_lookup(tc, qname))
+                    tc_class_push(tc, qname, parent, NULL, NULL, 0,
+                                 node->loc.line, node->loc.col);
+            }
+
+            continue;
+        }
+
         if (fm && fm->type == NODE_FUNC_MAP) {
             const char *func_name = fm->as.func_map.orig_name;
             if (!func_name) func_name = fm->as.func_map.pc_name;
@@ -1169,6 +1252,10 @@ static void tc_struct_decl(TCContext *tc, AstNode *node) {
         AstNode *f = node->as.struct_decl.fields.items[i];
         field_names[i] = strdup(f->as.var_decl.name);
         field_types[i] = resolve_tc_type(tc, f->as.var_decl.type);
+        if (field_types[i].kind == TC_UNKNOWN && f->as.var_decl.type && strchr(f->as.var_decl.type, '.')) {
+            tc_error(tc, node->loc, "unknown class or module type '%s' in field '%s' of struct '%s'",
+                     f->as.var_decl.type, f->as.var_decl.name, name);
+        }
     }
 
     tc_struct_push(tc, name, field_names, field_types, count,
@@ -1178,14 +1265,56 @@ static void tc_struct_decl(TCContext *tc, AstNode *node) {
 static void tc_func_decl(TCContext *tc, AstNode *node) {
     const char *name = node->as.func_decl.name;
     const char *ret_type_str = node->as.func_decl.ret_type;
-    TCType ret_type = resolve_tc_type(tc, ret_type_str);
+
+    /* Check if return type is a generic parameter */
+    int ret_is_generic = 0;
+    if (node->as.func_decl.generic_count > 0 && ret_type_str) {
+        for (size_t g = 0; g < node->as.func_decl.generic_count; g++) {
+            if (strcmp(ret_type_str, node->as.func_decl.generic_params[g]) == 0) {
+                ret_is_generic = 1;
+                break;
+            }
+        }
+    }
+
+    TCType ret_type;
+    if (ret_is_generic) {
+        ret_type = make_type(TC_UNKNOWN);
+    } else {
+        ret_type = resolve_tc_type(tc, ret_type_str);
+        if (ret_type.kind == TC_UNKNOWN && ret_type_str && strchr(ret_type_str, '.')) {
+            tc_error(tc, node->loc, "unknown class or module type '%s' in return type of '%s'",
+                     ret_type_str, name);
+        }
+    }
 
     size_t param_count = node->as.func_decl.params.count;
     TCType *param_types = param_count > 0 ? malloc(param_count * sizeof(TCType)) : NULL;
 
     for (size_t i = 0; i < param_count; i++) {
         AstNode *p = node->as.func_decl.params.items[i];
-        param_types[i] = resolve_tc_type(tc, p->as.param.type);
+        const char *ptype = p->as.param.type;
+
+        /* Check if this parameter uses a generic type */
+        int is_generic = 0;
+        if (node->as.func_decl.generic_count > 0 && ptype) {
+            for (size_t g = 0; g < node->as.func_decl.generic_count; g++) {
+                if (strcmp(ptype, node->as.func_decl.generic_params[g]) == 0) {
+                    is_generic = 1;
+                    break;
+                }
+            }
+        }
+
+        if (is_generic) {
+            param_types[i] = make_type(TC_UNKNOWN);
+        } else {
+            param_types[i] = resolve_tc_type(tc, ptype);
+            if (param_types[i].kind == TC_UNKNOWN && ptype && strchr(ptype, '.')) {
+                tc_error(tc, node->loc, "unknown class or module type '%s' in parameter %zu of '%s'",
+                         ptype, i + 1, name);
+            }
+        }
     }
 
     tc_func_push(tc, name, ret_type, param_types, param_count,
@@ -1217,6 +1346,10 @@ static void tc_class_decl(TCContext *tc, AstNode *node) {
         AstNode *f = node->as.class_decl.fields.items[i];
         field_names[parent_field_count + i] = strdup(f->as.var_decl.name);
         field_types[parent_field_count + i] = resolve_tc_type(tc, f->as.var_decl.type);
+        if (field_types[parent_field_count + i].kind == TC_UNKNOWN && f->as.var_decl.type && strchr(f->as.var_decl.type, '.')) {
+            tc_error(tc, node->loc, "unknown class or module type '%s' in field '%s' of class '%s'",
+                     f->as.var_decl.type, f->as.var_decl.name, name);
+        }
     }
 
     tc_class_push(tc, name, parent, field_names, field_types, total,

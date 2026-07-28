@@ -56,6 +56,11 @@ typedef struct {
     size_t func_map_count;
     size_t func_map_cap;
 
+    /* Generic function templates: stores AST nodes for @generics functions */
+    struct { char *name; AstNode *decl; } *generic_funcs;
+    size_t generic_func_count;
+    size_t generic_func_cap;
+
     struct { char *alias; char *orig; } *typedefs;
     size_t typedef_count;
     size_t typedef_cap;
@@ -100,6 +105,10 @@ const char *typedef_resolve(CodegenCtx *cg, const char *name);
 LLVMValueRef var_lookup(CodegenCtx *cg, const char *name);
 int var_lookup_index(CodegenCtx *cg, const char *name, size_t *out_index);
 LLVMTypeRef var_lookup_type(CodegenCtx *cg, const char *name);
+
+/* Generic function registry */
+void generic_func_push(CodegenCtx *cg, const char *name, AstNode *decl);
+AstNode *generic_func_lookup(CodegenCtx *cg, const char *name);
 void struct_push(CodegenCtx *cg, const char *name, LLVMTypeRef ty);
 LLVMTypeRef struct_lookup(CodegenCtx *cg, const char *name);
 void struct_push_fields(CodegenCtx *cg, const char *struct_name, char **field_names, size_t count);

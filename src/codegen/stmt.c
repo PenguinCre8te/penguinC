@@ -83,6 +83,9 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
             if (LLVMGetTypeKind(init_ty) == LLVMIntegerTypeKind &&
                 LLVMGetTypeKind(ty) == LLVMPointerTypeKind) {
                 init_val = LLVMBuildIntToPtr(cg->builder, init_val, ty, "inttoptr");
+            } else if (LLVMGetTypeKind(init_ty) == LLVMPointerTypeKind &&
+                       LLVMGetTypeKind(ty) == LLVMIntegerTypeKind) {
+                init_val = LLVMBuildPtrToInt(cg->builder, init_val, ty, "ptrtoint");
             } else if (LLVMGetTypeKind(init_ty) == LLVMIntegerTypeKind &&
                        LLVMGetTypeKind(ty) == LLVMIntegerTypeKind &&
                        LLVMGetIntTypeWidth(init_ty) != LLVMGetIntTypeWidth(ty)) {

@@ -1,0 +1,12 @@
+#import std.console;
+
+@generics(T)
+T identity(T x) {
+    return x;
+}
+
+int main() {
+    int v = identity(42);
+    console.println_int(v);
+    return 0;
+}

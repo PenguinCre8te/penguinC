@@ -6,6 +6,21 @@ static void codegen_struct_decl(CodegenCtx *cg, AstNode *node);
 static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     const char *name = node->as.func_decl.name;
     const char *ret_type_name = node->as.func_decl.ret_type;
+
+    /* Generic functions: store template */
+    if (node->as.func_decl.generic_count > 0) {
+        generic_func_push(cg, name, node);
+
+        /* Static dispatch (default): compile with i8* params, skip body */
+        if (node->as.func_decl.generic_dispatch == 0) {
+            /* Fall through — generic types resolve to i8* via resolve_type */
+        }
+        /* Dynamic dispatch: only store template, generate specialized versions on call */
+        else {
+            return;
+        }
+    }
+
     LLVMTypeRef ret_ty = resolve_type(cg, ret_type_name);
     if (LLVMGetTypeKind(ret_ty) == LLVMStructTypeKind)
         ret_ty = LLVMPointerType(ret_ty, 0);

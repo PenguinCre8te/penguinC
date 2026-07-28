@@ -57,6 +57,7 @@ typedef enum {
     TOK_NULL_LIT,
     TOK_QUESTION,
     TOK_AS,
+    TOK_AT,              /* @ decorator */
 
     /* Special */
     TOK_EOF,
@@ -130,6 +131,8 @@ typedef enum {
     NODE_ENUM_DECL,
     NODE_UNION_DECL,
     NODE_TYPEDEF_DECL,
+    NODE_DECORATOR,      /* @name or @name(args) applied to a declaration */
+    NODE_GENERIC_INST,   /* Generic type instantiation: Foo[T] */
 } NodeType;
 
 /* ------------------------------------------------------------------ */
@@ -179,13 +182,13 @@ struct AstNode {
         struct { char *pc_name; char *c_name; char *ret_type; char **param_types; size_t param_count; char *orig_name; } func_map;
 
         /* NODE_STRUCT_DECL */
-        struct { char *name; NodeList fields; } struct_decl;
+        struct { char *name; NodeList fields; NodeList decorators; } struct_decl;
 
         /* NODE_CLASS_DECL */
-        struct { char *name; char *parent; NodeList fields; NodeList methods; } class_decl;
+        struct { char *name; char *parent; NodeList fields; NodeList methods; NodeList decorators; } class_decl;
 
         /* NODE_FUNC_DECL */
-        struct { char *ret_type; char *name; char *class_name; NodeList params; AstNode *body; int is_method; } func_decl;
+        struct { char *ret_type; char *name; char *class_name; NodeList params; AstNode *body; int is_method; NodeList decorators; char **generic_params; size_t generic_count; int generic_dispatch; /* 0=static, 1=dynamic */ } func_decl;
 
         /* NODE_PARAM */
         struct { char *type; char *name; int is_borrow; int is_lock; } param;
@@ -270,7 +273,7 @@ struct AstNode {
         struct { /* empty */ } self_ref;
 
         /* NODE_NEW_EXPR */
-        struct { char *type_name; NodeList args; } new_expr;
+        struct { char *type_name; NodeList args; NodeList type_args; } new_expr;
 
         /* NODE_SIZEOF_EXPR */
         struct { char *type_name; } sizeof_expr;
@@ -325,6 +328,12 @@ struct AstNode {
 
         /* NODE_TYPEDEF_DECL */
         struct { char *orig_type; char *new_name; } typedef_decl;
+
+        /* NODE_DECORATOR */
+        struct { char *name; NodeList args; AstNode *target; } decorator;
+
+        /* NODE_GENERIC_INST */
+        struct { char *base_name; NodeList type_args; } generic_inst;
     } as;
 };
 
@@ -385,5 +394,7 @@ AstNode *ast_new_cast(SrcLoc loc, const char *type_name, AstNode *operand);
 AstNode *ast_new_enum_decl(SrcLoc loc, const char *name);
 AstNode *ast_new_union_decl(SrcLoc loc, const char *name);
 AstNode *ast_new_typedef_decl(SrcLoc loc, const char *orig_type, const char *new_name);
+AstNode *ast_new_decorator(SrcLoc loc, const char *name, AstNode *target);
+AstNode *ast_new_generic_inst(SrcLoc loc, const char *base_name);
 
 #endif /* PENGUINC_AST_H */

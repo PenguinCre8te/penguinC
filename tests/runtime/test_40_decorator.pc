@@ -1,0 +1,19 @@
+#import std.console;
+
+@benchmark
+int add(int a, int b) {
+    return a + b;
+}
+
+@logging("info")
+int subtract(int a, int b) {
+    return a - b;
+}
+
+int main() {
+    int r1 = add(10, 20);
+    int r2 = subtract(50, 30);
+    console.println_int(r1);
+    console.println_int(r2);
+    return 0;
+}

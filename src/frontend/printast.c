@@ -31,6 +31,8 @@ void print_ast(AstNode *node, int depth) {
         case NODE_STRUCT_DECL:
             print_indent(depth);
             printf("Struct(%s)\n", node->as.struct_decl.name);
+            for (size_t i = 0; i < node->as.struct_decl.decorators.count; i++)
+                print_ast(node->as.struct_decl.decorators.items[i], depth + 1);
             for (size_t i = 0; i < node->as.struct_decl.fields.count; i++)
                 print_ast(node->as.struct_decl.fields.items[i], depth + 1);
             break;
@@ -38,6 +40,8 @@ void print_ast(AstNode *node, int depth) {
             print_indent(depth);
             printf("Class(%s%s)\n", node->as.class_decl.name,
                    node->as.class_decl.parent ? node->as.class_decl.parent : "");
+            for (size_t i = 0; i < node->as.class_decl.decorators.count; i++)
+                print_ast(node->as.class_decl.decorators.items[i], depth + 1);
             for (size_t i = 0; i < node->as.class_decl.fields.count; i++)
                 print_ast(node->as.class_decl.fields.items[i], depth + 1);
             for (size_t i = 0; i < node->as.class_decl.methods.count; i++)
@@ -47,6 +51,8 @@ void print_ast(AstNode *node, int depth) {
             print_indent(depth);
             printf("Func(%s %s, params=%zu)\n", node->as.func_decl.ret_type,
                    node->as.func_decl.name, node->as.func_decl.params.count);
+            for (size_t i = 0; i < node->as.func_decl.decorators.count; i++)
+                print_ast(node->as.func_decl.decorators.items[i], depth + 1);
             for (size_t i = 0; i < node->as.func_decl.params.count; i++)
                 print_ast(node->as.func_decl.params.items[i], depth + 1);
             if (node->as.func_decl.body)
@@ -265,6 +271,18 @@ void print_ast(AstNode *node, int depth) {
             print_indent(depth);
             printf("Typedef(%s -> %s)\n", node->as.typedef_decl.orig_type,
                    node->as.typedef_decl.new_name);
+            break;
+        case NODE_DECORATOR:
+            print_indent(depth);
+            printf("Decorator(@%s, args=%zu)\n", node->as.decorator.name,
+                   node->as.decorator.args.count);
+            for (size_t i = 0; i < node->as.decorator.args.count; i++)
+                print_ast(node->as.decorator.args.items[i], depth + 1);
+            break;
+        case NODE_GENERIC_INST:
+            print_indent(depth);
+            printf("Generic(%s, args=%zu)\n", node->as.generic_inst.base_name,
+                   node->as.generic_inst.type_args.count);
             break;
         default:
             print_indent(depth);

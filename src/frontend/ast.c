@@ -78,6 +78,7 @@ AstNode *ast_new_struct_decl(SrcLoc loc, const char *name) {
     AstNode *n = ast_new(NODE_STRUCT_DECL, loc);
     n->as.struct_decl.name = dup_str(name);
     nodelist_init(&n->as.struct_decl.fields);
+    nodelist_init(&n->as.struct_decl.decorators);
     return n;
 }
 
@@ -87,6 +88,7 @@ AstNode *ast_new_class_decl(SrcLoc loc, const char *name, const char *parent) {
     n->as.class_decl.parent = dup_str(parent);
     nodelist_init(&n->as.class_decl.fields);
     nodelist_init(&n->as.class_decl.methods);
+    nodelist_init(&n->as.class_decl.decorators);
     return n;
 }
 
@@ -96,7 +98,12 @@ AstNode *ast_new_func_decl(SrcLoc loc, const char *ret_type, const char *name, i
     n->as.func_decl.name       = dup_str(name);
     n->as.func_decl.class_name = NULL;
     n->as.func_decl.is_method  = is_method;
+    n->as.func_decl.body       = NULL;
+    n->as.func_decl.generic_params = NULL;
+    n->as.func_decl.generic_count  = 0;
+    n->as.func_decl.generic_dispatch = 0; /* static by default */
     nodelist_init(&n->as.func_decl.params);
+    nodelist_init(&n->as.func_decl.decorators);
     return n;
 }
 
@@ -295,6 +302,7 @@ AstNode *ast_new_new_expr(SrcLoc loc, const char *type_name) {
     AstNode *n = ast_new(NODE_NEW_EXPR, loc);
     n->as.new_expr.type_name = dup_str(type_name);
     nodelist_init(&n->as.new_expr.args);
+    nodelist_init(&n->as.new_expr.type_args);
     return n;
 }
 
@@ -410,5 +418,20 @@ AstNode *ast_new_typedef_decl(SrcLoc loc, const char *orig_type, const char *new
     AstNode *n = ast_new(NODE_TYPEDEF_DECL, loc);
     n->as.typedef_decl.orig_type = dup_str(orig_type);
     n->as.typedef_decl.new_name  = dup_str(new_name);
+    return n;
+}
+
+AstNode *ast_new_decorator(SrcLoc loc, const char *name, AstNode *target) {
+    AstNode *n = ast_new(NODE_DECORATOR, loc);
+    n->as.decorator.name   = dup_str(name);
+    n->as.decorator.target = target;
+    nodelist_init(&n->as.decorator.args);
+    return n;
+}
+
+AstNode *ast_new_generic_inst(SrcLoc loc, const char *base_name) {
+    AstNode *n = ast_new(NODE_GENERIC_INST, loc);
+    n->as.generic_inst.base_name = dup_str(base_name);
+    nodelist_init(&n->as.generic_inst.type_args);
     return n;
 }

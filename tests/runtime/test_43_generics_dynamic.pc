@@ -1,0 +1,12 @@
+#import std.console;
+
+@generics(T, dispatch=dynamic)
+T dynamic_identity(T x) {
+    return x;
+}
+
+int main() {
+    int v = dynamic_identity(99);
+    console.println_int(v);
+    return 0;
+}

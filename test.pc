@@ -1,29 +1,17 @@
-class LinkedListNode {
-    linkedListNode next = null
-    int value
+#import std.console.(print)
 
-    // Constructor to initialize a node
-    void init(int val) {
-        self.value = val
+@generics(T)
+class integer {
+    T value;
+    void new(int value) {
+        self.value = value
     }
-
-    void append(int val) {
-        linkedListNode current = self
-        // Traverse to the last node
-        while (current.next != null) {
-            current = current.next
-        }
-        // Create the new node
-        current.next = new LinkedListNode()
-        current.next.init(val)
+    string toS() {
+        self.value.toS()
     }
 }
 
-int main() {
-    // Initialize the head of the list
-    linkedListNode list = new LinkedListNode()
-    list.init(0) // Usually the head holds a dummy value or the first element
-    
-    list.append(10)
-    list.append(20)
+int main(){
+    integer<int> i = new integer<int>(10)
+    print(i.toS())
 }

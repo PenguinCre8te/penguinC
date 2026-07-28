@@ -256,3 +256,22 @@ void label_push(CodegenCtx *cg, const char *name, LLVMBasicBlockRef block) {
     cg->labels[cg->label_count].block = block;
     cg->label_count++;
 }
+
+/* Generic function registry */
+void generic_func_push(CodegenCtx *cg, const char *name, AstNode *decl) {
+    if (cg->generic_func_count >= cg->generic_func_cap) {
+        cg->generic_func_cap = cg->generic_func_cap ? cg->generic_func_cap * 2 : 16;
+        cg->generic_funcs = realloc(cg->generic_funcs, cg->generic_func_cap * sizeof(*cg->generic_funcs));
+    }
+    cg->generic_funcs[cg->generic_func_count].name = strdup(name);
+    cg->generic_funcs[cg->generic_func_count].decl = decl;
+    cg->generic_func_count++;
+}
+
+AstNode *generic_func_lookup(CodegenCtx *cg, const char *name) {
+    for (size_t i = cg->generic_func_count; i > 0; i--) {
+        if (strcmp(cg->generic_funcs[i - 1].name, name) == 0)
+            return cg->generic_funcs[i - 1].decl;
+    }
+    return NULL;
+}

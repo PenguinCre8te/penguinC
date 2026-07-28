@@ -320,6 +320,42 @@ static AstNode *parse_import_directive(void) {
 /*  Any IDENT in type position is a type name. This allows typedefs,   */
 /*  custom types, etc. without hardcoding keywords.                    */
 /* ------------------------------------------------------------------ */
+
+/* Extract type name string from a parse_type() result.
+ * For NODE_IDENTIFIER returns the name.
+ * For NODE_GENERIC_INST returns "Base<T1,T2,...>". */
+static const char *type_node_name(AstNode *node) {
+    if (!node) return "";
+    if (node->type == NODE_IDENTIFIER)
+        return node->as.ident.name;
+    if (node->type == NODE_GENERIC_INST) {
+        /* Build "Base<T1,T2,..." into a static buffer */
+        static char buf[512];
+        size_t p = 0;
+        p += snprintf(buf + p, sizeof(buf) - p, "%s", node->as.generic_inst.base_name);
+        buf[p++] = '<';
+        for (size_t i = 0; i < node->as.generic_inst.type_args.count && p < sizeof(buf) - 1; i++) {
+            AstNode *arg = node->as.generic_inst.type_args.items[i];
+            if (i > 0 && p < sizeof(buf) - 1) buf[p++] = ',';
+            const char *aname = type_node_name(arg);
+            size_t len = strlen(aname);
+            if (p + len < sizeof(buf) - 1) {
+                memcpy(buf + p, aname, len);
+                p += len;
+            }
+        }
+        if (p < sizeof(buf) - 1) buf[p++] = '>';
+        buf[p] = '\0';
+        return buf;
+    }
+    return "";
+}
+
+/* Check if a parse_type() result is a generic instantiation */
+static int type_node_is_generic(AstNode *node) {
+    return node && node->type == NODE_GENERIC_INST;
+}
+
 static AstNode *parse_type(void) {
     SrcLoc loc = cur()->loc;
 
@@ -349,6 +385,22 @@ static AstNode *parse_type(void) {
         snprintf(base + len, sizeof(base) - len, ".%s", part.value);
     }
 
+    /* Generic type args: type<type1, type2, ...> */
+    if (match(TOK_LT)) {
+        AstNode *gen = ast_new_generic_inst(loc, base);
+        while (!cur_is(TOK_GT) && !cur_is(TOK_EOF)) {
+            AstNode *arg = parse_type();
+            nodelist_push(&gen->as.generic_inst.type_args, arg);
+            if (!match(TOK_COMMA)) break;
+        }
+        expect(TOK_GT);
+        /* pointer suffix on generic type: Foo<T>* */
+        while (match(TOK_STAR)) {
+            /* TODO: handle pointer to generic type */
+        }
+        return gen;
+    }
+
     /* pointer suffix: type* */
     while (match(TOK_STAR)) {
         size_t len = strlen(base);
@@ -370,7 +422,7 @@ static AstNode *parse_param(void) {
     AstNode *type = parse_type();
     Token name = expect(TOK_IDENT);
     check_var_camel_case(name.loc, name.value);
-    return ast_new_param(loc, type->as.ident.name, name.value, is_borrow, 0);
+    return ast_new_param(loc, type_node_name(type), name.value, is_borrow, 0);
 }
 
 static NodeList parse_param_list(void) {
@@ -541,7 +593,7 @@ static AstNode *parse_for_c_style(SrcLoc loc) {
                 if (match(TOK_ASSIGN)) {
                     init_val = parse_expr();
                 }
-                init = ast_new_var_decl(init_loc, type->as.ident.name, name.value, init_val, is_mut, is_shared);
+                init = ast_new_var_decl(init_loc, type_node_name(type), name.value, init_val, is_mut, is_shared);
             } else {
                 /* mut/shared but not followed by type - treat as expression */
                 init = parse_expr();
@@ -651,7 +703,7 @@ static AstNode *parse_var_decl_or_expr(void) {
         AstNode *type = parse_type();
         Token name = expect(TOK_IDENT);
         match(TOK_SEMICOLON);
-        return ast_new_typedef_decl(loc, type->as.ident.name, name.value);
+        return ast_new_typedef_decl(loc, type_node_name(type), name.value);
     }
 
     /* [shared] [mut] type name = init; */
@@ -666,7 +718,7 @@ static AstNode *parse_var_decl_or_expr(void) {
             init = parse_expr();
         }
         match(TOK_SEMICOLON);
-        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, is_mut, is_shared);
+        return ast_new_var_decl(loc, type_node_name(type), name.value, init, is_mut, is_shared);
     }
 
     /* borrow [mut] name = expr; */
@@ -681,18 +733,24 @@ static AstNode *parse_var_decl_or_expr(void) {
                                 name.value, init, is_mut, 0);
     }
 
-    /* Heuristic: IDENT [*...] IDENT = var decl (type name) */
+    /* Heuristic: IDENT [*...<...>] IDENT = var decl (type name) */
     /* Also handles module.Type IDENT = var decl (e.g. threads.thread thread = ...) */
-    if (is_ident_like_type() && (peek_is(TOK_IDENT) || peek_is(TOK_STAR))) {
+    /* Also handles generic types: Foo<T> ident = ... */
+    if (is_ident_like_type() && (peek_is(TOK_IDENT) || peek_is(TOK_STAR) || peek_is(TOK_LT))) {
+        /* Save position to check if parse_type + IDENT works */
         AstNode *type = parse_type();
-        Token name = expect(TOK_IDENT);
-        check_var_camel_case(name.loc, name.value);
-        AstNode *init = NULL;
-        if (match(TOK_ASSIGN)) {
-            init = parse_expr();
+        if (cur_is(TOK_IDENT)) {
+            Token name = expect(TOK_IDENT);
+            check_var_camel_case(name.loc, name.value);
+            AstNode *init = NULL;
+            if (match(TOK_ASSIGN)) {
+                init = parse_expr();
+            }
+            match(TOK_SEMICOLON);
+            return ast_new_var_decl(loc, type_node_name(type), name.value, init, 0, 0);
         }
-        match(TOK_SEMICOLON);
-        return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0, 0);
+        /* Not a var decl — backtrack not possible here, fall through to expr */
+        /* The type was already consumed; this is a parse error handled elsewhere */
     }
 
     /* Dotted type heuristic: IDENT.IDENT IDENT = var decl (e.g. threads.thread thread) */
@@ -721,7 +779,7 @@ static AstNode *parse_var_decl_or_expr(void) {
                 init = parse_expr();
             }
             match(TOK_SEMICOLON);
-            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, 0, 0);
+            return ast_new_var_decl(loc, type_node_name(type), name.value, init, 0, 0);
         }
     }
 
@@ -796,7 +854,7 @@ static AstNode *parse_struct_decl(void) {
         Token field = expect(TOK_IDENT);
         match(TOK_SEMICOLON);
         AstNode *field_node = ast_new_var_decl(type->loc,
-            type->as.ident.name, field.value, NULL, 0, 0);
+            type_node_name(type), field.value, NULL, 0, 0);
         nodelist_push(&s->as.struct_decl.fields, field_node);
     }
     expect(TOK_RBRACE);
@@ -842,7 +900,7 @@ static AstNode *parse_union_decl(void) {
         Token field = expect(TOK_IDENT);
         match(TOK_SEMICOLON);
         AstNode *field_node = ast_new_var_decl(type->loc,
-            type->as.ident.name, field.value, NULL, 0, 0);
+            type_node_name(type), field.value, NULL, 0, 0);
         nodelist_push(&u->as.union_decl.fields, field_node);
     }
     expect(TOK_RBRACE);
@@ -875,7 +933,7 @@ static AstNode *parse_class_decl(void) {
                 expect(TOK_RPAREN);
                 AstNode *body = parse_block();
                 AstNode *method = ast_new_func_decl(method_name.loc,
-                    ret_type->as.ident.name, method_name.value, 1);
+                    type_node_name(ret_type), method_name.value, 1);
                 method->as.func_decl.class_name = strdup(name.value);
                 method->as.func_decl.params = params;
                 method->as.func_decl.body   = body;
@@ -883,7 +941,7 @@ static AstNode *parse_class_decl(void) {
             } else {
                 match(TOK_SEMICOLON);
                 AstNode *field_node = ast_new_var_decl(ret_type->loc,
-                    ret_type->as.ident.name, method_name.value, NULL, 0, 0);
+                    type_node_name(ret_type), method_name.value, NULL, 0, 0);
                 nodelist_push(&c->as.class_decl.fields, field_node);
             }
         } else {
@@ -905,7 +963,7 @@ static AstNode *parse_func_decl(int is_method) {
     NodeList params = parse_param_list();
     expect(TOK_RPAREN);
     AstNode *body = parse_block();
-    AstNode *fn = ast_new_func_decl(loc, ret_type->as.ident.name, name.value, is_method);
+    AstNode *fn = ast_new_func_decl(loc, type_node_name(ret_type), name.value, is_method);
     fn->as.func_decl.params = params;
     fn->as.func_decl.body   = body;
     return fn;
@@ -1496,7 +1554,111 @@ static AstNode *parse_pc_file(const char *filepath) {
     return import_node;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Decorators                                                         */
+/* ------------------------------------------------------------------ */
+static AstNode *parse_decorator(void) {
+    SrcLoc loc = cur()->loc;
+    adv(); /* consume '@' */
+    Token name = expect(TOK_IDENT);
+    AstNode *dec = ast_new_decorator(loc, name.value, NULL);
+
+    /* Optional argument list: @name(arg1, arg2, ...) */
+    if (match(TOK_LPAREN)) {
+        while (!cur_is(TOK_RPAREN) && !cur_is(TOK_EOF)) {
+            AstNode *arg = parse_expr();
+            nodelist_push(&dec->as.decorator.args, arg);
+            if (!match(TOK_COMMA)) break;
+        }
+        expect(TOK_RPAREN);
+    }
+
+    return dec;
+}
+
 static AstNode *parse_top_level(void) {
+    /* Handle decorators: @name or @name(args) before a declaration */
+    if (cur_is(TOK_AT)) {
+        /* Collect all consecutive decorators */
+        NodeList decorators;
+        nodelist_init(&decorators);
+        while (cur_is(TOK_AT)) {
+            AstNode *dec = parse_decorator();
+            nodelist_push(&decorators, dec);
+        }
+        /* Parse the declaration that follows */
+        AstNode *decl = parse_top_level();
+        if (decl) {
+            /* Attach decorators to the declaration */
+            NodeList *target_list = NULL;
+            switch (decl->type) {
+                case NODE_FUNC_DECL:   target_list = &decl->as.func_decl.decorators; break;
+                case NODE_STRUCT_DECL: target_list = &decl->as.struct_decl.decorators; break;
+                case NODE_CLASS_DECL:  target_list = &decl->as.class_decl.decorators; break;
+                default:
+                    error_at(decl->loc, ERR_PARSER,
+                             "decorator cannot be applied to this declaration");
+                    break;
+            }
+            if (target_list) {
+                for (size_t i = 0; i < decorators.count; i++) {
+                    AstNode *dec = decorators.items[i];
+                    dec->as.decorator.target = decl;
+                    nodelist_push(target_list, dec);
+
+                    /* Special handling for @generics decorator */
+                    if (decl->type == NODE_FUNC_DECL &&
+                        strcmp(dec->as.decorator.name, "generics") == 0) {
+                        /* Extract type parameter names and dispatch mode from args */
+                        size_t gp_count = dec->as.decorator.args.count;
+                        decl->as.func_decl.generic_dispatch = 0; /* static by default */
+                        if (gp_count > 0) {
+                            /* First pass: count actual type params (skip dispatch=...) */
+                            size_t type_param_count = 0;
+                            for (size_t g = 0; g < gp_count; g++) {
+                                AstNode *arg = dec->as.decorator.args.items[g];
+                                if (arg->type == NODE_BINARY &&
+                                    strcmp(arg->as.binary.op, "=") == 0 &&
+                                    arg->as.binary.left->type == NODE_IDENTIFIER &&
+                                    strcmp(arg->as.binary.left->as.ident.name, "dispatch") == 0) {
+                                    /* dispatch=... handled below */
+                                } else {
+                                    type_param_count++;
+                                }
+                            }
+                            decl->as.func_decl.generic_count = type_param_count;
+                            decl->as.func_decl.generic_params = malloc(type_param_count * sizeof(char *));
+                            size_t gi = 0;
+                            for (size_t g = 0; g < gp_count; g++) {
+                                AstNode *arg = dec->as.decorator.args.items[g];
+                                if (arg->type == NODE_BINARY &&
+                                    strcmp(arg->as.binary.op, "=") == 0 &&
+                                    arg->as.binary.left->type == NODE_IDENTIFIER &&
+                                    strcmp(arg->as.binary.left->as.ident.name, "dispatch") == 0) {
+                                    /* dispatch=static or dispatch=dynamic */
+                                    AstNode *val = arg->as.binary.right;
+                                    if (val->type == NODE_IDENTIFIER) {
+                                        if (strcmp(val->as.ident.name, "dynamic") == 0)
+                                            decl->as.func_decl.generic_dispatch = 1;
+                                        else
+                                            decl->as.func_decl.generic_dispatch = 0;
+                                    }
+                                } else if (arg->type == NODE_IDENTIFIER) {
+                                    decl->as.func_decl.generic_params[gi++] = strdup(arg->as.ident.name);
+                                } else {
+                                    decl->as.func_decl.generic_params[gi++] = strdup("T");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* Free the temporary list (decorators are now owned by the decl) */
+        free(decorators.items);
+        return decl;
+    }
+
     switch (cur()->type) {
         case TOK_HASH: {
             adv(); /* consume '#' */
@@ -1525,7 +1687,7 @@ static AstNode *parse_top_level(void) {
             AstNode *type = parse_type();
             Token name = expect(TOK_IDENT);
             match(TOK_SEMICOLON);
-            return ast_new_typedef_decl(loc, type->as.ident.name, name.value);
+            return ast_new_typedef_decl(loc, type_node_name(type), name.value);
         }
         case TOK_SHARED:
         case TOK_MUT: {
@@ -1541,7 +1703,7 @@ static AstNode *parse_top_level(void) {
                 init = parse_expr();
             }
             match(TOK_SEMICOLON);
-            return ast_new_var_decl(loc, type->as.ident.name, name.value, init, is_mut, is_shared);
+            return ast_new_var_decl(loc, type_node_name(type), name.value, init, is_mut, is_shared);
         }
         default:
             /* Skip storage class modifiers at top level */
@@ -1564,7 +1726,7 @@ static AstNode *parse_top_level(void) {
                         AstNode *init = NULL;
                         if (match(TOK_ASSIGN)) init = parse_expr();
                         match(TOK_SEMICOLON);
-                        return ast_new_var_decl(loc, type->as.ident.name, nm.value, init, 0, 0);
+                        return ast_new_var_decl(loc, type_node_name(type), nm.value, init, 0, 0);
                     }
                 }
                 *P = saved;
@@ -1918,6 +2080,15 @@ static AstNode *parse_primary(void) {
             Token type_name = *cur();
             adv();
             AstNode *ne = ast_new_new_expr(loc, type_name.value);
+            /* Generic type args: new Foo<T>(args) */
+            if (match(TOK_LT)) {
+                while (!cur_is(TOK_GT) && !cur_is(TOK_EOF)) {
+                    AstNode *arg = parse_type();
+                    nodelist_push(&ne->as.new_expr.type_args, arg);
+                    if (!match(TOK_COMMA)) break;
+                }
+                expect(TOK_GT);
+            }
             expect(TOK_LPAREN);
             if (!cur_is(TOK_RPAREN)) {
                 nodelist_push(&ne->as.new_expr.args, parse_expr());
