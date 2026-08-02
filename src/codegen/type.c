@@ -16,6 +16,25 @@ LLVMTypeRef resolve_type(CodegenCtx *cg, const char *name) {
         if (base_len < sizeof(base_name)) {
             memcpy(base_name, name, base_len);
             base_name[base_len] = '\0';
+
+            /* array<T> → pointer to element type (null-terminated) */
+            if (strcmp(base_name, "array") == 0) {
+                /* Extract the element type from inside < > */
+                const char *elem_start = lt + 1;
+                const char *elem_end = strrchr(name, '>');
+                if (elem_end && elem_end > elem_start) {
+                    size_t elem_len = elem_end - elem_start;
+                    char elem_type[256];
+                    if (elem_len < sizeof(elem_type)) {
+                        memcpy(elem_type, elem_start, elem_len);
+                        elem_type[elem_len] = '\0';
+                        return LLVMPointerType(resolve_type(cg, elem_type), 0);
+                    }
+                }
+                /* fallback: array of unknown = i8** */
+                return LLVMPointerType(LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0), 0);
+            }
+
             LLVMTypeRef st = struct_lookup(cg, base_name);
             if (st) return st;
             /* Not yet monomorphized — return i8* as fallback */
@@ -27,6 +46,7 @@ LLVMTypeRef resolve_type(CodegenCtx *cg, const char *name) {
     if (strcmp(name, "float") == 0)  return LLVMDoubleTypeInContext(cg->ctx);
     if (strcmp(name, "bool") == 0)   return LLVMInt1TypeInContext(cg->ctx);
     if (strcmp(name, "void") == 0)   return LLVMVoidTypeInContext(cg->ctx);
+    if (strcmp(name, "char") == 0)   return LLVMInt8TypeInContext(cg->ctx);
     if (strcmp(name, "string") == 0) return LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
     if (strchr(name, '.')) {
         return LLVMInt64TypeInContext(cg->ctx);

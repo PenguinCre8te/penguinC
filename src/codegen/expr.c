@@ -300,6 +300,19 @@ static LLVMValueRef get_lvalue(CodegenCtx *cg, AstNode *node) {
     if (node->type == NODE_UNARY && strcmp(node->as.unary.op, "*") == 0) {
         return codegen_expr(cg, node->as.unary.operand);
     }
+    if (node->type == NODE_INDEX) {
+        LLVMValueRef obj = codegen_expr(cg, node->as.index.object);
+        LLVMValueRef idx = codegen_expr(cg, node->as.index.index);
+        if (!obj || !idx) return NULL;
+        /* Determine element type from variable info */
+        LLVMTypeRef elem_ty = NULL;
+        if (node->as.index.object->type == NODE_IDENTIFIER)
+            elem_ty = var_lookup_elem_type(cg, node->as.index.object->as.ident.name);
+        if (!elem_ty || LLVMGetTypeKind(elem_ty) == LLVMVoidTypeKind)
+            elem_ty = LLVMInt64TypeInContext(cg->ctx);
+        return LLVMBuildGEP2(cg->builder, elem_ty, obj,
+            (LLVMValueRef[]){idx}, 1, "idx.ptr");
+    }
     return codegen_expr(cg, node);
 }
 
@@ -357,12 +370,82 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         const char *method = node->as.call.callee->as.member.member;
         if (strcmp(method, "toI") == 0 || strcmp(method, "toF") == 0 ||
             strcmp(method, "toS") == 0 || strcmp(method, "toB") == 0) {
-            LLVMValueRef val = codegen_expr(cg, obj);
-            if (!val) return NULL;
 
             const char *src_type = NULL;
             if (obj->type == NODE_IDENTIFIER)
                 src_type = var_lookup_type_name(cg, obj->as.ident.name);
+
+            /* Skip built-in conversion for struct/class types — dispatch to class method instead */
+            {
+                int is_class = 0;
+                const char *resolved_name = NULL;
+                if (src_type && struct_lookup(cg, src_type)) {
+                    is_class = 1;
+                    resolved_name = src_type;
+                }
+                /* For generic types like "Foo<int>", build the monomorphized name */
+                if (!is_class && src_type) {
+                    const char *lt = strchr(src_type, '<');
+                    if (lt) {
+                        char spec[512];
+                        size_t sp = 0;
+                        size_t base_len = lt - src_type;
+                        if (base_len < sizeof(spec)) {
+                            memcpy(spec, src_type, base_len);
+                            sp = base_len;
+                            const char *p = lt + 1;
+                            while (*p && *p != '>') {
+                                while (*p == ' ') p++;
+                                if (*p == ',') { p++; continue; }
+                                if (*p == '>') break;
+                                const char *start = p;
+                                while (*p && *p != ',' && *p != '>' && *p != ' ') p++;
+                                size_t arg_len = p - start;
+                                char arg[256];
+                                if (arg_len < sizeof(arg)) {
+                                    memcpy(arg, start, arg_len);
+                                    arg[arg_len] = '\0';
+                                    if (strcmp(arg, "int") == 0 || strcmp(arg, "long") == 0)
+                                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_i64");
+                                    else if (strcmp(arg, "float") == 0)
+                                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_f64");
+                                    else if (strcmp(arg, "bool") == 0)
+                                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_i1");
+                                    else if (strcmp(arg, "string") == 0)
+                                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_str");
+                                    else
+                                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_%s", arg);
+                                }
+                                while (*p && *p != ',' && *p != '>') p++;
+                            }
+                            spec[sp] = '\0';
+                            if (struct_lookup(cg, spec)) {
+                                is_class = 1;
+                                resolved_name = struct_lookup(cg, spec) ? spec : src_type;
+                            }
+                        }
+                    }
+                }
+                if (is_class && resolved_name) {
+                    char method_mangled[512];
+                    snprintf(method_mangled, sizeof(method_mangled), "%s.%s", resolved_name, method);
+                    LLVMValueRef callee_fn = LLVMGetNamedFunction(cg->module, method_mangled);
+                    if (callee_fn) {
+                        LLVMTypeRef callee_ft = fn_type_lookup(cg, method_mangled);
+                        LLVMValueRef self_val = codegen_expr(cg, obj);
+                        if (!self_val) return NULL;
+                        if (!callee_ft) {
+                            LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                            callee_ft = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr}, 1, 0);
+                        }
+                        return LLVMBuildCall2(cg->builder, callee_ft, callee_fn,
+                            (LLVMValueRef[]){self_val}, 1, "method.call");
+                    }
+                }
+            }
+
+            LLVMValueRef val = codegen_expr(cg, obj);
+            if (!val) return NULL;
 
             LLVMTypeRef val_ty = LLVMTypeOf(val);
             LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
@@ -594,7 +677,7 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         if (callee) {
             callee_fn_type = fn_type_lookup(cg, mangled);
         } else {
-            static const char *type_chars[] = {"i", "f", "s", "b"};
+            static const char *type_chars[] = {"i", "f", "s", "b", "c"};
             size_t argc = node->as.call.args.count;
 
             /* Evaluate arguments early so we can match overload types */
@@ -605,7 +688,7 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
             /* Try all mangled overloads, pick the best type-compatible one */
             {
                 int best_score = -1;
-                for (size_t try_idx = 0; try_idx < 4; try_idx++) {
+                for (size_t try_idx = 0; try_idx < 5; try_idx++) {
                     char try_name[512];
                     size_t p = 0;
                     p += snprintf(try_name + p, sizeof(try_name) - p, "_pC%s", ident_name);
@@ -628,6 +711,10 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                         else if (LLVMGetTypeKind(param_tys[a]) == LLVMPointerTypeKind &&
                                  LLVMGetTypeKind(actual) == LLVMPointerTypeKind)
                             score += 2;
+                        else if (LLVMGetTypeKind(param_tys[a]) == LLVMIntegerTypeKind &&
+                                 LLVMGetTypeKind(actual) == LLVMIntegerTypeKind &&
+                                 LLVMGetIntTypeWidth(actual) < LLVMGetIntTypeWidth(param_tys[a]))
+                            score += 1;  /* integer promotion: i8 → i64 */
                         else
                             compatible = 0;
                     }
@@ -812,7 +899,7 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                             LLVMPositionBuilderAtEnd(cg->builder, entry);
 
                             cg->cur_fn = callee;
-                            cg->scope_base = 0;
+                            cg->scope_base = saved_var_count;
 
                             /* Create allocas for parameters */
                             for (unsigned i = 0; i < (unsigned)param_count; i++) {
@@ -877,6 +964,25 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         args = argc > 0 ? malloc(argc * sizeof(LLVMValueRef)) : NULL;
         for (size_t i = 0; i < argc; i++)
             args[i] = codegen_expr(cg, node->as.call.args.items[i]);
+    }
+
+    /* Implicit i8→i64 promotion for integer arguments smaller than the parameter type */
+    if (callee_fn_type && argc > 0) {
+        unsigned param_count = LLVMCountParamTypes(callee_fn_type);
+        LLVMTypeRef *param_tys = param_count > 0 ? malloc(param_count * sizeof(LLVMTypeRef)) : NULL;
+        if (param_tys) LLVMGetParamTypes(callee_fn_type, param_tys);
+        for (unsigned i = 0; i < argc && i < param_count; i++) {
+            LLVMTypeRef arg_ty = LLVMTypeOf(args[i]);
+            LLVMTypeRef param_ty = param_tys[i];
+            if (LLVMGetTypeKind(arg_ty) == LLVMIntegerTypeKind &&
+                LLVMGetTypeKind(param_ty) == LLVMIntegerTypeKind) {
+                unsigned arg_w = LLVMGetIntTypeWidth(arg_ty);
+                unsigned param_w = LLVMGetIntTypeWidth(param_ty);
+                if (arg_w < param_w)
+                    args[i] = LLVMBuildSExt(cg->builder, args[i], param_ty, "arg.ext");
+            }
+        }
+        if (param_tys) free(param_tys);
     }
 
     {
@@ -953,7 +1059,262 @@ static LLVMValueRef codegen_sizeof(CodegenCtx *cg, AstNode *node) {
 }
 
 static LLVMValueRef codegen_new_expr(CodegenCtx *cg, AstNode *node) {
-    LLVMTypeRef ty = resolve_type(cg, node->as.new_expr.type_name);
+    const char *type_name = node->as.new_expr.type_name;
+    int has_type_args = node->as.new_expr.type_args.count > 0;
+
+    /* Handle generic class instantiation: new Foo<T>(args) */
+    if (has_type_args) {
+        AstNode *tmpl = generic_class_lookup(cg, type_name);
+        if (tmpl) {
+            /* Build monomorphized struct name: Foo_i64 for Foo<int> */
+            char spec_name[512];
+            size_t sp = 0;
+            sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "%s", type_name);
+            for (size_t t = 0; t < node->as.new_expr.type_args.count; t++) {
+                AstNode *ta = node->as.new_expr.type_args.items[t];
+                if (ta->type == NODE_IDENTIFIER) {
+                    const char *tn = ta->as.ident.name;
+                    if (strcmp(tn, "int") == 0 || strcmp(tn, "long") == 0)
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_i64");
+                    else if (strcmp(tn, "float") == 0)
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_f64");
+                    else if (strcmp(tn, "bool") == 0)
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_i1");
+                    else if (strcmp(tn, "string") == 0)
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_str");
+                    else
+                        sp += snprintf(spec_name + sp, sizeof(spec_name) - sp, "_%s", tn);
+                }
+            }
+
+            /* Check if already monomorphized */
+            LLVMTypeRef struct_ty = struct_lookup(cg, spec_name);
+            if (!struct_ty) {
+                /* Monomorphize: build struct with concrete field types */
+                size_t field_count = tmpl->as.class_decl.fields.count;
+                LLVMTypeRef *field_types = field_count > 0 ? malloc(field_count * sizeof(LLVMTypeRef)) : NULL;
+                char **field_names = field_count > 0 ? malloc(field_count * sizeof(char *)) : NULL;
+
+                for (size_t f = 0; f < field_count; f++) {
+                    AstNode *field = tmpl->as.class_decl.fields.items[f];
+                    field_names[f] = field->as.var_decl.name;
+                    /* Substitute generic type params with concrete types */
+                    const char *ftype = field->as.var_decl.type;
+                    field_types[f] = NULL;
+                    for (size_t t = 0; t < tmpl->as.class_decl.generic_count; t++) {
+                        if (strcmp(ftype, tmpl->as.class_decl.generic_params[t]) == 0) {
+                            /* Resolve concrete type from type_args */
+                            AstNode *ta = node->as.new_expr.type_args.items[t];
+                            if (ta->type == NODE_IDENTIFIER) {
+                                if (strcmp(ta->as.ident.name, "int") == 0 ||
+                                    strcmp(ta->as.ident.name, "long") == 0)
+                                    field_types[f] = LLVMInt64TypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "float") == 0)
+                                    field_types[f] = LLVMDoubleTypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "bool") == 0)
+                                    field_types[f] = LLVMInt1TypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "string") == 0)
+                                    field_types[f] = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                else {
+                                    /* Try as struct/class */
+                                    LLVMTypeRef st = struct_lookup(cg, ta->as.ident.name);
+                                    if (st) field_types[f] = st;
+                                    else field_types[f] = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if (!field_types[f])
+                        field_types[f] = resolve_type(cg, ftype);
+                }
+
+                struct_ty = LLVMStructTypeInContext(cg->ctx, field_types,
+                    (unsigned)field_count, 0);
+                struct_push(cg, spec_name, struct_ty);
+                if (field_count > 0)
+                    struct_push_fields(cg, spec_name, field_names, field_count);
+
+                if (field_types) free(field_types);
+                if (field_names) free(field_names);
+
+                /* Monomorphize methods */
+                for (size_t m = 0; m < tmpl->as.class_decl.methods.count; m++) {
+                    AstNode *method = tmpl->as.class_decl.methods.items[m];
+                    const char *mname = method->as.func_decl.name;
+
+                    /* Build monomorphized method name */
+                    char mangled[512];
+                    snprintf(mangled, sizeof(mangled), "%s.%s", spec_name, mname);
+
+                    /* Skip if already exists */
+                    if (LLVMGetNamedFunction(cg->module, mangled))
+                        continue;
+
+                    /* Resolve return type with substitutions */
+                    const char *ret_type_name = method->as.func_decl.ret_type;
+                    LLVMTypeRef ret_ty = NULL;
+                    for (size_t t = 0; t < tmpl->as.class_decl.generic_count; t++) {
+                        if (strcmp(ret_type_name, tmpl->as.class_decl.generic_params[t]) == 0) {
+                            AstNode *ta = node->as.new_expr.type_args.items[t];
+                            if (ta->type == NODE_IDENTIFIER) {
+                                if (strcmp(ta->as.ident.name, "int") == 0 ||
+                                    strcmp(ta->as.ident.name, "long") == 0)
+                                    ret_ty = LLVMInt64TypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "float") == 0)
+                                    ret_ty = LLVMDoubleTypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "bool") == 0)
+                                    ret_ty = LLVMInt1TypeInContext(cg->ctx);
+                                else if (strcmp(ta->as.ident.name, "string") == 0)
+                                    ret_ty = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                else {
+                                    LLVMTypeRef st = struct_lookup(cg, ta->as.ident.name);
+                                    if (st) ret_ty = st;
+                                    else ret_ty = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if (!ret_ty) ret_ty = resolve_type(cg, ret_type_name);
+                    if (LLVMGetTypeKind(ret_ty) == LLVMStructTypeKind)
+                        ret_ty = LLVMPointerType(ret_ty, 0);
+
+                    /* Build param types: self is always ptr + user params */
+                    size_t user_param_count = method->as.func_decl.params.count;
+                    int method_has_self = (user_param_count > 0 &&
+                                           method->as.func_decl.params.items[0]->as.param.is_self);
+                    size_t total_params = user_param_count + (method_has_self ? 0 : 1);
+                    LLVMTypeRef *param_types = malloc(total_params * sizeof(LLVMTypeRef));
+                    size_t pti = 0;
+                    if (!method_has_self)
+                        param_types[pti++] = LLVMPointerType(struct_ty, 0); /* self */
+
+                    for (size_t p = 0; p < user_param_count; p++) {
+                        AstNode *pm = method->as.func_decl.params.items[p];
+                        if (pm->as.param.is_self) {
+                            param_types[pti++] = LLVMPointerType(struct_ty, 0);
+                            continue;
+                        }
+                        const char *ptype = pm->as.param.type;
+                        LLVMTypeRef pty = NULL;
+                        for (size_t t = 0; t < tmpl->as.class_decl.generic_count; t++) {
+                            if (strcmp(ptype, tmpl->as.class_decl.generic_params[t]) == 0) {
+                                AstNode *ta = node->as.new_expr.type_args.items[t];
+                                if (ta->type == NODE_IDENTIFIER) {
+                                    if (strcmp(ta->as.ident.name, "int") == 0 ||
+                                        strcmp(ta->as.ident.name, "long") == 0)
+                                        pty = LLVMInt64TypeInContext(cg->ctx);
+                                    else if (strcmp(ta->as.ident.name, "float") == 0)
+                                        pty = LLVMDoubleTypeInContext(cg->ctx);
+                                    else if (strcmp(ta->as.ident.name, "bool") == 0)
+                                        pty = LLVMInt1TypeInContext(cg->ctx);
+                                    else if (strcmp(ta->as.ident.name, "string") == 0)
+                                        pty = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                    else {
+                                        LLVMTypeRef st = struct_lookup(cg, ta->as.ident.name);
+                                        if (st) pty = st;
+                                        else pty = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        if (!pty) pty = resolve_type(cg, ptype);
+                        param_types[pti++] = pty;
+                    }
+
+                    LLVMTypeRef fn_type = LLVMFunctionType(ret_ty, param_types,
+                        (unsigned)total_params, 0);
+                    LLVMValueRef fn = LLVMAddFunction(cg->module, mangled, fn_type);
+                    fn_type_push(cg, mangled, fn_type);
+
+                    /* Generate method body */
+                    LLVMValueRef prev_fn = cg->cur_fn;
+                    LLVMBasicBlockRef prev_insert = LLVMGetInsertBlock(cg->builder);
+                    size_t saved_var_count = cg->var_count;
+                    size_t saved_scope_base = cg->scope_base;
+
+                    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(cg->ctx, fn, "entry");
+                    LLVMPositionBuilderAtEnd(cg->builder, entry);
+                    cg->cur_fn = fn;
+
+                    /* Create allocas for params */
+                    for (unsigned i = 0; i < (unsigned)total_params; i++) {
+                        LLVMValueRef param = LLVMGetParam(fn, i);
+                        const char *pname;
+                        if (i == 0 && !method_has_self)
+                            pname = "self";
+                        else if (method_has_self && i == 0)
+                            pname = "self";
+                        else {
+                            size_t pidx = method_has_self ? i : i - 1;
+                            pname = method->as.func_decl.params.items[pidx]->as.param.name;
+                        }
+                        LLVMSetValueName2(param, pname, strlen(pname));
+                        LLVMTypeRef pty = LLVMTypeOf(param);
+                        LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, pty, pname);
+                        LLVMBuildStore(cg->builder, param, alloca_inst);
+                        var_push(cg, pname, alloca_inst, pty);
+                    }
+
+                    /* Set scope_base AFTER params — params are borrowed, not ARC-owned */
+                    cg->scope_base = cg->var_count;
+
+                    /* Mark self as the struct type */
+                    var_set_struct_name(cg, "self", spec_name);
+                    var_set_elem_type(cg, "self", struct_ty);
+
+                    /* Generate body */
+                    codegen_block(cg, method->as.func_decl.body);
+
+                    /* Implicit return */
+                    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(cg->builder))) {
+                        if (LLVMGetTypeKind(ret_ty) == LLVMVoidTypeKind)
+                            LLVMBuildRetVoid(cg->builder);
+                        else
+                            LLVMBuildRet(cg->builder, LLVMConstNull(ret_ty));
+                    }
+
+                    /* Restore state */
+                    cg->var_count = saved_var_count;
+                    cg->scope_base = saved_scope_base;
+                    cg->cur_fn = prev_fn;
+                    if (prev_insert)
+                        LLVMPositionBuilderAtEnd(cg->builder, prev_insert);
+
+                    free(param_types);
+                }
+            }
+
+            /* Now create the instance */
+            LLVMValueRef size = LLVMSizeOf(struct_ty);
+            LLVMValueRef ptr = call_arc_alloc(cg, size);
+            LLVMValueRef typed = LLVMBuildBitCast(cg->builder, ptr,
+                LLVMPointerType(struct_ty, 0), "new.typed");
+
+            /* Call constructor: SpecName.new(self, args...) */
+            if (node->as.new_expr.args.count > 0) {
+                char ctor_name[512];
+                snprintf(ctor_name, sizeof(ctor_name), "%s.new", spec_name);
+                LLVMValueRef ctor = LLVMGetNamedFunction(cg->module, ctor_name);
+                if (ctor) {
+                    size_t argc = node->as.new_expr.args.count + 1;
+                    LLVMValueRef *args = malloc(argc * sizeof(LLVMValueRef));
+                    args[0] = typed;
+                    for (size_t i = 0; i < node->as.new_expr.args.count; i++)
+                        args[i + 1] = codegen_expr(cg, node->as.new_expr.args.items[i]);
+                    LLVMTypeRef ctor_ft = fn_type_lookup(cg, ctor_name);
+                    LLVMBuildCall2(cg->builder, ctor_ft, ctor, args, (unsigned)argc, "");
+                    free(args);
+                }
+            }
+            return typed;
+        }
+    }
+
+    /* Non-generic new */
+    LLVMTypeRef ty = resolve_type(cg, type_name);
     LLVMValueRef size = LLVMSizeOf(ty);
     LLVMValueRef ptr = call_arc_alloc(cg, size);
     LLVMValueRef typed = LLVMBuildBitCast(cg->builder, ptr,
@@ -1197,6 +1558,90 @@ static LLVMValueRef codegen_borrow(CodegenCtx *cg, AstNode *node) {
     return codegen_expr(cg, node->as.borrow_expr.expr);
 }
 
+static LLVMValueRef codegen_array_lit(CodegenCtx *cg, AstNode *node) {
+    size_t count = node->as.array_lit.elements.count;
+    LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
+    LLVMTypeRef i32_ty = LLVMInt32TypeInContext(cg->ctx);
+
+    if (count == 0) {
+        /* Empty array: allocate i64 header only, return ptr past it */
+        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+        LLVMValueRef raw = call_arc_alloc(cg, LLVMSizeOf(i64_ty));
+        LLVMValueRef hdr = LLVMBuildBitCast(cg->builder, raw, LLVMPointerType(i64_ty, 0), "arr.hdr");
+        LLVMBuildStore(cg->builder, LLVMConstInt(i64_ty, 0, 0), hdr);
+        LLVMValueRef data = LLVMBuildGEP2(cg->builder, i64_ty, hdr,
+            (LLVMValueRef[]){LLVMConstInt(i32_ty, 1, 0)}, 1, "arr.data");
+        return LLVMBuildBitCast(cg->builder, data, i8ptr, "arr.ptr");
+    }
+
+    /* Determine element type from first element */
+    LLVMTypeRef elem_ty = NULL;
+    AstNode *first = node->as.array_lit.elements.items[0];
+    if (first->type == NODE_INT_LIT || first->type == NODE_FLOAT_LIT) {
+        if (first->type == NODE_FLOAT_LIT)
+            elem_ty = LLVMDoubleTypeInContext(cg->ctx);
+        else
+            elem_ty = i64_ty;
+    } else if (first->type == NODE_STRING_LIT) {
+        elem_ty = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+    } else {
+        LLVMValueRef fv = codegen_expr(cg, first);
+        if (fv) elem_ty = LLVMTypeOf(fv);
+        else elem_ty = i64_ty;
+    }
+
+    /* Layout: [i64 length | elem0 elem1 ...]
+     * Single allocation: sizeof(i64) + count * sizeof(elem_ty)
+     * Data pointer returned to user points past the i64 header. */
+    LLVMTypeRef ptr_ty = LLVMPointerType(elem_ty, 0);
+    LLVMValueRef hdr_size = LLVMSizeOf(i64_ty);
+    LLVMValueRef data_size = LLVMBuildMul(cg->builder,
+        LLVMSizeOf(elem_ty), LLVMConstInt(i64_ty, count, 0), "arr.dsize");
+    LLVMValueRef total = LLVMBuildAdd(cg->builder, hdr_size, data_size, "arr.total");
+    LLVMValueRef raw = call_arc_alloc(cg, total);
+    LLVMValueRef hdr = LLVMBuildBitCast(cg->builder, raw, LLVMPointerType(i64_ty, 0), "arr.hdr");
+
+    /* Store length at header[0] */
+    LLVMBuildStore(cg->builder, LLVMConstInt(i64_ty, count, 0), hdr);
+
+    /* Data pointer = header + 1 (skip the i64 header) */
+    LLVMValueRef data_i8 = LLVMBuildGEP2(cg->builder, i64_ty, hdr,
+        (LLVMValueRef[]){LLVMConstInt(i32_ty, 1, 0)}, 1, "arr.data");
+    LLVMValueRef arr = LLVMBuildBitCast(cg->builder, data_i8, ptr_ty, "arr.ptr");
+
+    /* Fill elements */
+    for (size_t i = 0; i < count; i++) {
+        LLVMValueRef val = codegen_expr(cg, node->as.array_lit.elements.items[i]);
+        if (!val) continue;
+        LLVMValueRef ptr = LLVMBuildGEP2(cg->builder, elem_ty, arr,
+            (LLVMValueRef[]){
+                LLVMConstInt(i32_ty, (unsigned)i, 0)
+            }, 1, "arr.elem");
+        LLVMBuildStore(cg->builder, val, ptr);
+    }
+
+    return arr;
+}
+
+static LLVMValueRef codegen_index(CodegenCtx *cg, AstNode *node) {
+    LLVMValueRef obj = codegen_expr(cg, node->as.index.object);
+    LLVMValueRef idx = codegen_expr(cg, node->as.index.index);
+    if (!obj || !idx) return NULL;
+
+    /* Determine element type from variable info or type annotation */
+    LLVMTypeRef elem_ty = NULL;
+    if (node->as.index.object->type == NODE_IDENTIFIER) {
+        elem_ty = var_lookup_elem_type(cg, node->as.index.object->as.ident.name);
+    }
+    if (!elem_ty || LLVMGetTypeKind(elem_ty) == LLVMVoidTypeKind) {
+        elem_ty = LLVMInt64TypeInContext(cg->ctx);
+    }
+
+    LLVMValueRef ptr = LLVMBuildGEP2(cg->builder, elem_ty, obj,
+        (LLVMValueRef[]){idx}, 1, "idx.ptr");
+    return LLVMBuildLoad2(cg->builder, elem_ty, ptr, "idx.val");
+}
+
 LLVMValueRef codegen_expr(CodegenCtx *cg, AstNode *node) {
     if (!node) return NULL;
     switch (node->type) {
@@ -1222,6 +1667,8 @@ LLVMValueRef codegen_expr(CodegenCtx *cg, AstNode *node) {
         case NODE_BORROW_EXPR:  return codegen_borrow(cg, node);
         case NODE_FSTRING:      return codegen_fstring(cg, node);
         case NODE_FSTRING_PART: return codegen_fstring_part(cg, node);
+        case NODE_ARRAY_LIT:    return codegen_array_lit(cg, node);
+        case NODE_INDEX:        return codegen_index(cg, node);
         case NODE_STMT_EXPR:    return codegen_expr(cg, node->as.stmt_expr.expr);
         default:
             error_at(node->loc, ERR_SEMANTIC,

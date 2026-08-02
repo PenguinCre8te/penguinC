@@ -73,6 +73,8 @@ static int is_coercible(TCType from, TCType to) {
     if (from.kind == TC_BOOL && to.kind == TC_INT) return 1;
     if (from.kind == TC_FLOAT && to.kind == TC_INT) return 1;
     if (from.kind == TC_INT && to.kind == TC_BOOL) return 1;
+    if (from.kind == TC_CHAR && to.kind == TC_INT) return 1;   /* char promotes to int */
+    if (from.kind == TC_INT && to.kind == TC_CHAR) return 1;   /* int demotes to char */
     return 0;
 }
 
@@ -83,6 +85,7 @@ static const char *type_name_str(TCType t) {
         case TC_BOOL:    return "bool";
         case TC_VOID:    return "void";
         case TC_STRING:  return "string";
+        case TC_CHAR:    return "char";
         case TC_STRUCT:  return t.name ? t.name : "struct";
         case TC_CLASS:   return t.name ? t.name : "class";
         case TC_ENUM:    return t.name ? t.name : "enum";
@@ -403,6 +406,8 @@ static TCType resolve_tc_type(TCContext *tc, const char *type_str) {
         return make_type(TC_VOID);
     if (strcmp(resolved, "string") == 0)
         return make_type(TC_STRING);
+    if (strcmp(resolved, "char") == 0)
+        return make_type(TC_CHAR);
 
     if (tc_struct_lookup(tc, resolved))
         return make_struct_type(resolved);
@@ -920,6 +925,19 @@ static TCType tc_expr(TCContext *tc, AstNode *node) {
         case NODE_FSTRING_PART: return make_type(TC_STRING);
         case NODE_ALLOC_EXPR:   return make_pointer_type(make_type(TC_VOID));
         case NODE_FREE_EXPR:    return make_type(TC_VOID);
+        case NODE_ARRAY_LIT: {
+            /* Array literal: infer element type from first element */
+            if (node->as.array_lit.elements.count > 0) {
+                return tc_expr(tc, node->as.array_lit.elements.items[0]);
+            }
+            return make_pointer_type(make_type(TC_VOID));
+        }
+        case NODE_INDEX: {
+            /* Array index: returns element type (TODO: infer from array type) */
+            tc_expr(tc, node->as.index.object);
+            tc_expr(tc, node->as.index.index);
+            return make_type(TC_INT);
+        }
         case NODE_STMT_EXPR:    return tc_expr(tc, node->as.stmt_expr.expr);
         default: return make_type(TC_UNKNOWN);
     }
@@ -1015,9 +1033,21 @@ static void tc_do_while(TCContext *tc, AstNode *node) {
 }
 
 static void tc_for(TCContext *tc, AstNode *node) {
-    tc_expr(tc, node->as.for_stmt.iter);
+    TCType iter_type = tc_expr(tc, node->as.for_stmt.iter);
     scope_push(tc);
-    scope_add_var(tc, node->as.for_stmt.var, make_type(TC_INT), 1, 0,
+    /* Infer loop variable type from iteration target */
+    TCType var_type = make_type(TC_INT);
+    if (node->as.for_stmt.iter && node->as.for_stmt.iter->type == NODE_IDENTIFIER) {
+        const char *vn = node->as.for_stmt.iter->as.ident.name;
+        int found = 0;
+        TCType vtype = scope_lookup_var(tc, vn, &found);
+        if (found && vtype.kind == TC_STRING) {
+            var_type = make_type(TC_CHAR);
+        }
+    } else if (node->as.for_stmt.iter && node->as.for_stmt.iter->type == NODE_STRING_LIT) {
+        var_type = make_type(TC_CHAR);
+    }
+    scope_add_var(tc, node->as.for_stmt.var, var_type, 1, 0,
                   node->loc.line, node->loc.col);
     tc_block(tc, node->as.for_stmt.body);
     scope_pop(tc);
@@ -1437,12 +1467,21 @@ static void tc_program(TCContext *tc, AstNode *program) {
                     tc->current_func_node = m;
 
                     TCType self_type = make_class_type(class_name);
-                    scope_add_var(tc, "self", self_type, 1, 0,
-                                  m->loc.line, m->loc.col);
+                    int has_explicit_self = (m->as.func_decl.params.count > 0 &&
+                                             m->as.func_decl.params.items[0]->as.param.is_self);
+                    if (!has_explicit_self) {
+                        scope_add_var(tc, "self", self_type, 1, 0,
+                                      m->loc.line, m->loc.col);
+                    }
 
                     for (size_t k = 0; k < m->as.func_decl.params.count; k++) {
                         AstNode *p = m->as.func_decl.params.items[k];
-                        TCType pt = resolve_tc_type(tc, p->as.param.type);
+                        TCType pt;
+                        if (p->as.param.is_self) {
+                            pt = self_type;
+                        } else {
+                            pt = resolve_tc_type(tc, p->as.param.type);
+                        }
                         scope_add_var(tc, p->as.param.name, pt, 1, 0,
                                       p->loc.line, p->loc.col);
                     }

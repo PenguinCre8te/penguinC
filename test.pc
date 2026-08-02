@@ -1,17 +1,12 @@
-#import std.console.(print)
+#import std.console.(print, println)
 
-@generics(T)
-class integer {
-    T value;
-    void new(int value) {
-        self.value = value
+int main() {
+    string penguin = "penguin"
+    for ch in penguin {
+        println(ch)
     }
-    string toS() {
-        self.value.toS()
-    }
-}
 
-int main(){
-    integer<int> i = new integer<int>(10)
-    print(i.toS())
+    for ch in "penguin" {
+        println(ch)
+    }
 }

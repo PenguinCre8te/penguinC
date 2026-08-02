@@ -86,6 +86,9 @@ AstNode *ast_new_class_decl(SrcLoc loc, const char *name, const char *parent) {
     AstNode *n = ast_new(NODE_CLASS_DECL, loc);
     n->as.class_decl.name   = dup_str(name);
     n->as.class_decl.parent = dup_str(parent);
+    n->as.class_decl.generic_params = NULL;
+    n->as.class_decl.generic_count  = 0;
+    n->as.class_decl.generic_dispatch = 0;
     nodelist_init(&n->as.class_decl.fields);
     nodelist_init(&n->as.class_decl.methods);
     nodelist_init(&n->as.class_decl.decorators);
@@ -107,12 +110,13 @@ AstNode *ast_new_func_decl(SrcLoc loc, const char *ret_type, const char *name, i
     return n;
 }
 
-AstNode *ast_new_param(SrcLoc loc, const char *type, const char *name, int is_borrow, int is_lock) {
+AstNode *ast_new_param(SrcLoc loc, const char *type, const char *name, int is_borrow, int is_lock, int is_self) {
     AstNode *n = ast_new(NODE_PARAM, loc);
-    n->as.param.type      = dup_str(type);
+    n->as.param.type      = type ? dup_str(type) : NULL;
     n->as.param.name      = dup_str(name);
     n->as.param.is_borrow = is_borrow;
     n->as.param.is_lock   = is_lock;
+    n->as.param.is_self   = is_self;
     return n;
 }
 
@@ -433,5 +437,18 @@ AstNode *ast_new_generic_inst(SrcLoc loc, const char *base_name) {
     AstNode *n = ast_new(NODE_GENERIC_INST, loc);
     n->as.generic_inst.base_name = dup_str(base_name);
     nodelist_init(&n->as.generic_inst.type_args);
+    return n;
+}
+
+AstNode *ast_new_array_lit(SrcLoc loc) {
+    AstNode *n = ast_new(NODE_ARRAY_LIT, loc);
+    nodelist_init(&n->as.array_lit.elements);
+    return n;
+}
+
+AstNode *ast_new_index(SrcLoc loc, AstNode *object, AstNode *index) {
+    AstNode *n = ast_new(NODE_INDEX, loc);
+    n->as.index.object = object;
+    n->as.index.index  = index;
     return n;
 }

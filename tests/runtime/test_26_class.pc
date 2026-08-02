@@ -2,7 +2,7 @@
 class Counter {
     int value;
 
-    void new(int start) {
+    void new(self, int start) {
         self.value = start;
     }
 }

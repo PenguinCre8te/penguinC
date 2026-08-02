@@ -1,0 +1,16 @@
+#import std.console.(println)
+
+int main() {
+    // Iterate over named string variable
+    string penguin = "penguin"
+    for ch in penguin {
+        println(ch)
+    }
+
+    // Iterate over string literal
+    for ch in "abc" {
+        println(ch)
+    }
+
+    return 0;
+}

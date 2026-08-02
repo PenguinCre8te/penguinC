@@ -53,6 +53,18 @@ long io_println_float(double val) {
     return 0;
 }
 
+long io_print_char(long val) {
+    char c = (char)val;
+    return write(1, &c, 1);
+}
+
+long io_println_char(long val) {
+    char c = (char)val;
+    long r = write(1, &c, 1);
+    write(1, "\n", 1);
+    return r;
+}
+
 long program_exit_c(long code) {
     _exit(code);
     return 0;

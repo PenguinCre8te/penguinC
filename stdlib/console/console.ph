@@ -3,9 +3,11 @@
 long print(string s) => io_print;
 long print(int val) => io_print_int;
 long print(float val) => io_print_float;
+long print(char val) => io_print_char;
 long println(string s) => io_println;
 long println(int val) => io_println_int;
 long println(float val) => io_println_float;
+long println(char val) => io_println_char;
 long print_int(int val) => io_print_int;
 long println_int(int val) => io_println_int;
 long program_exit(long code) => program_exit_c;

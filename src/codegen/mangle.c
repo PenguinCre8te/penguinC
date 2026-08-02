@@ -40,10 +40,12 @@ void mangle_call_name(char *buf, size_t buflen, const char *name,
             else if (resolved && (strcmp(resolved, "int") == 0 || strcmp(resolved, "long") == 0))  buf[pos++] = 'i';
             else if (resolved && strcmp(resolved, "float") == 0)         buf[pos++] = 'f';
             else if (resolved && strcmp(resolved, "bool") == 0)          buf[pos++] = 'b';
+            else if (resolved && strcmp(resolved, "char") == 0)          buf[pos++] = 'c';
             else if (tn && strcmp(tn, "string") == 0)                    buf[pos++] = 's';
             else if (ty == LLVMInt64TypeInContext(cg->ctx))              buf[pos++] = 'i';
             else if (ty == LLVMDoubleTypeInContext(cg->ctx))             buf[pos++] = 'f';
             else if (ty == LLVMInt1TypeInContext(cg->ctx))               buf[pos++] = 'b';
+            else if (ty && LLVMGetTypeKind(ty) == LLVMIntegerTypeKind)   buf[pos++] = 'i';
             else if (!ty) {
                 buf[pos++] = 'i';
             } else                                                         buf[pos++] = 'p';

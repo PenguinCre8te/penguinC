@@ -33,21 +33,88 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
     const char *var_name  = node->as.var_decl.name;
     LLVMTypeRef ty = resolve_type(cg, type_name);
 
+    /* For generic types like "Foo<int>", resolve the monomorphized struct name */
+    const char *struct_name = type_name;
+    const char *lt = strchr(type_name, '<');
+    if (lt && (LLVMGetTypeKind(ty) == LLVMPointerTypeKind)) {
+        /* Build the monomorphized name from the type args */
+        char spec[512];
+        size_t sp = 0;
+        size_t base_len = lt - type_name;
+        if (base_len < sizeof(spec)) {
+            memcpy(spec, type_name, base_len);
+            sp = base_len;
+            /* Parse the type args from the string: Foo<T1,T2> */
+            const char *p = lt + 1;
+            while (*p && *p != '>') {
+                /* Skip whitespace */
+                while (*p == ' ') p++;
+                if (*p == ',') { p++; continue; }
+                if (*p == '>') break;
+                /* Read type arg name */
+                const char *start = p;
+                while (*p && *p != ',' && *p != '>' && *p != ' ') p++;
+                size_t arg_len = p - start;
+                char arg[256];
+                if (arg_len < sizeof(arg)) {
+                    memcpy(arg, start, arg_len);
+                    arg[arg_len] = '\0';
+                    if (strcmp(arg, "int") == 0 || strcmp(arg, "long") == 0)
+                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_i64");
+                    else if (strcmp(arg, "float") == 0)
+                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_f64");
+                    else if (strcmp(arg, "bool") == 0)
+                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_i1");
+                    else if (strcmp(arg, "string") == 0)
+                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_str");
+                    else
+                        sp += snprintf(spec + sp, sizeof(spec) - sp, "_%s", arg);
+                }
+                while (*p && *p != ',' && *p != '>') p++;
+            }
+            spec[sp] = '\0';
+            /* Check if this monomorphized struct exists */
+            LLVMTypeRef spec_ty = struct_lookup(cg, spec);
+            if (spec_ty) {
+                struct_name = spec;
+                ty = spec_ty;
+            }
+        }
+    }
+
     if (node->as.var_decl.init && node->as.var_decl.init->type == NODE_NEW_EXPR &&
-        LLVMGetTypeKind(ty) == LLVMStructTypeKind) {
+        (LLVMGetTypeKind(ty) == LLVMStructTypeKind || LLVMGetTypeKind(ty) == LLVMPointerTypeKind)) {
         LLVMTypeRef ptr_ty = LLVMPointerType(ty, 0);
         LLVMValueRef alloca_inst = LLVMBuildAlloca(cg->builder, ptr_ty, var_name);
         var_push(cg, var_name, alloca_inst, ptr_ty);
         var_set_elem_type(cg, var_name, ty);
-        var_set_struct_name(cg, var_name, type_name);
-        var_set_type_name(cg, var_name, type_name);
+        var_set_struct_name(cg, var_name, struct_name);
+        var_set_type_name(cg, var_name, struct_name);
         var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
 
         /* Create debug info for this local variable */
         debug_create_variable(cg, var_name, node->loc, ptr_ty, alloca_inst);
 
         LLVMValueRef init_val = codegen_expr(cg, node->as.var_decl.init);
-        if (init_val) LLVMBuildStore(cg->builder, init_val, alloca_inst);
+        if (init_val) {
+            /* After evaluating init, re-resolve struct_name from the actual pointer element type */
+            LLVMTypeRef actual_ptr_ty = LLVMTypeOf(init_val);
+            if (LLVMGetTypeKind(actual_ptr_ty) == LLVMPointerTypeKind) {
+                LLVMTypeRef elem_ty = LLVMGetElementType(actual_ptr_ty);
+                if (LLVMGetTypeKind(elem_ty) == LLVMStructTypeKind) {
+                    /* Find the struct name from the struct registry */
+                    for (size_t si = 0; si < cg->struct_count; si++) {
+                        if (cg->structs[si].ty == elem_ty) {
+                            var_set_struct_name(cg, var_name, cg->structs[si].name);
+                            var_set_type_name(cg, var_name, cg->structs[si].name);
+                            var_set_elem_type(cg, var_name, elem_ty);
+                            break;
+                        }
+                    }
+                }
+            }
+            LLVMBuildStore(cg->builder, init_val, alloca_inst);
+        }
         return;
     }
 
@@ -57,6 +124,22 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
     var_set_is_shared(cg, var_name, node->as.var_decl.is_shared);
     if (LLVMGetTypeKind(ty) == LLVMStructTypeKind)
         var_set_struct_name(cg, var_name, type_name);
+
+    /* For array<T> types, set elem_type to the element type */
+    if (strncmp(type_name, "array<", 6) == 0 && LLVMGetTypeKind(ty) == LLVMPointerTypeKind) {
+        const char *elem_start = type_name + 6;
+        const char *elem_end = strrchr(type_name, '>');
+        if (elem_end && elem_end > elem_start) {
+            size_t elem_len = elem_end - elem_start;
+            char elem_type_name[256];
+            if (elem_len < sizeof(elem_type_name)) {
+                memcpy(elem_type_name, elem_start, elem_len);
+                elem_type_name[elem_len] = '\0';
+                LLVMTypeRef elem_ty = resolve_type(cg, elem_type_name);
+                var_set_elem_type(cg, var_name, elem_ty);
+            }
+        }
+    }
 
     /* Create debug info for this local variable */
     debug_create_variable(cg, var_name, node->loc, ty, alloca_inst);
@@ -102,6 +185,22 @@ static void codegen_var_decl(CodegenCtx *cg, AstNode *node) {
                 init_val = wrap_string_literal(cg, init_val);
             }
             LLVMBuildStore(cg->builder, init_val, alloca_inst);
+
+            /* For array literal init, set elem_type on the variable */
+            if (init_node->type == NODE_ARRAY_LIT && init_node->as.array_lit.elements.count > 0) {
+                AstNode *first = init_node->as.array_lit.elements.items[0];
+                LLVMTypeRef e_ty = NULL;
+                if (first->type == NODE_FLOAT_LIT)
+                    e_ty = LLVMDoubleTypeInContext(cg->ctx);
+                else if (first->type == NODE_INT_LIT)
+                    e_ty = LLVMInt64TypeInContext(cg->ctx);
+                else {
+                    LLVMValueRef fv = codegen_expr(cg, first);
+                    if (fv) e_ty = LLVMTypeOf(fv);
+                    else e_ty = LLVMInt64TypeInContext(cg->ctx);
+                }
+                var_set_elem_type(cg, var_name, e_ty);
+            }
         }
     }
 }
@@ -254,7 +353,198 @@ static void codegen_for(CodegenCtx *cg, AstNode *node) {
     LLVMBasicBlockRef end_bb  = LLVMAppendBasicBlockInContext(cg->ctx, fn, "for.end");
 
     LLVMTypeRef i64 = LLVMInt64TypeInContext(cg->ctx);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(cg->ctx);
 
+    /* Check if iter is an array (identifier with elem_type set, or array<T> type) */
+    int is_array_iter = 0;
+    LLVMTypeRef elem_ty = NULL;
+    LLVMValueRef arr_ptr = NULL;
+    if (node->as.for_stmt.iter) {
+        if (node->as.for_stmt.iter->type == NODE_IDENTIFIER) {
+            const char *vn = node->as.for_stmt.iter->as.ident.name;
+            /* Check elem_type (set by var_decl for array<T> or array literal) */
+            elem_ty = var_lookup_elem_type(cg, vn);
+            if (elem_ty) {
+                is_array_iter = 1;
+                arr_ptr = var_lookup(cg, vn);
+                if (arr_ptr) {
+                    /* arr_ptr is an alloca containing a pointer to data past the i64 header.
+                     * Load the actual data pointer from the alloca. */
+                    LLVMTypeRef ptr_ty = LLVMPointerType(elem_ty, 0);
+                    arr_ptr = LLVMBuildLoad2(cg->builder, ptr_ty, arr_ptr, "arr.deref");
+                }
+            }
+            /* Fallback: check type_name for array<T> */
+            if (!is_array_iter) {
+                const char *tn = var_lookup_type_name(cg, vn);
+                if (tn && strncmp(tn, "array<", 6) == 0) {
+                    is_array_iter = 1;
+                    elem_ty = var_lookup_elem_type(cg, vn);
+                    if (!elem_ty) elem_ty = i64;
+                    arr_ptr = var_lookup(cg, vn);
+                    if (arr_ptr) {
+                        LLVMTypeRef ptr_ty = LLVMPointerType(elem_ty, 0);
+                        arr_ptr = LLVMBuildLoad2(cg->builder, ptr_ty, arr_ptr, "arr.deref");
+                    }
+                }
+            }
+        } else if (node->as.for_stmt.iter->type == NODE_ARRAY_LIT) {
+            is_array_iter = 1;
+            arr_ptr = codegen_expr(cg, node->as.for_stmt.iter);
+            if (!elem_ty && node->as.for_stmt.iter->as.array_lit.elements.count > 0) {
+                AstNode *first = node->as.for_stmt.iter->as.array_lit.elements.items[0];
+                if (first->type == NODE_FLOAT_LIT)
+                    elem_ty = LLVMDoubleTypeInContext(cg->ctx);
+                else
+                    elem_ty = i64;
+            }
+            if (!elem_ty) elem_ty = i64;
+        }
+    }
+
+    if (!elem_ty) elem_ty = i64;
+
+    if (is_array_iter && arr_ptr) {
+        /* Array iteration: for item in arr
+         * Layout: [i64 length | elem0 elem1 ...]
+         * Data pointer is past the i64 header, so length is at data_ptr[-1]. */
+        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+        LLVMTypeRef i64ptr = LLVMPointerType(i64, 0);
+
+        /* Get length: go back 1 i64 from data pointer */
+        LLVMValueRef hdr_ptr = LLVMBuildBitCast(cg->builder, arr_ptr, i64ptr, "arr.hdr.ptr");
+        LLVMValueRef len_ptr = LLVMBuildGEP2(cg->builder, i64, hdr_ptr,
+            (LLVMValueRef[]){LLVMConstInt(LLVMInt32TypeInContext(cg->ctx), -1, 1)}, 1, "len.ptr");
+        LLVMValueRef arr_len = LLVMBuildLoad2(cg->builder, i64, len_ptr, "arr.len");
+
+        /* Index variable: i = 0 */
+        LLVMValueRef idx_alloca = LLVMBuildAlloca(cg->builder, i64, "for.idx");
+        var_push(cg, "__for_idx", idx_alloca, i64);
+        LLVMBuildStore(cg->builder, LLVMConstInt(i64, 0, 0), idx_alloca);
+
+        /* Loop variable: item (typed as elem_ty) */
+        LLVMValueRef item_alloca = LLVMBuildAlloca(cg->builder, elem_ty, node->as.for_stmt.var);
+        var_push(cg, node->as.for_stmt.var, item_alloca, elem_ty);
+        debug_create_variable(cg, node->as.for_stmt.var, node->loc, elem_ty, item_alloca);
+
+        LLVMBuildBr(cg->builder, cond_bb);
+
+        /* Condition: i < arr_len */
+        LLVMPositionBuilderAtEnd(cg->builder, cond_bb);
+        LLVMValueRef cur_idx = LLVMBuildLoad2(cg->builder, i64, idx_alloca, "for.i");
+        LLVMValueRef cmp = LLVMBuildICmp(cg->builder, LLVMIntSLT, cur_idx, arr_len, "for.cmp");
+        LLVMBuildCondBr(cg->builder, cmp, body_bb, end_bb);
+
+        /* Body: load arr[i] into item */
+        LLVMPositionBuilderAtEnd(cg->builder, body_bb);
+        LLVMValueRef elem_ptr = LLVMBuildGEP2(cg->builder, elem_ty, arr_ptr,
+            (LLVMValueRef[]){cur_idx}, 1, "elem.ptr");
+        LLVMValueRef elem_val = LLVMBuildLoad2(cg->builder, elem_ty, elem_ptr, "elem.val");
+        LLVMBuildStore(cg->builder, elem_val, item_alloca);
+
+        int saved_loop = cg->loop_depth;
+        LLVMBasicBlockRef saved_brk = cg->break_target;
+        LLVMBasicBlockRef saved_cont = cg->continue_target;
+        cg->loop_depth++;
+        cg->break_target = end_bb;
+        cg->continue_target = incr_bb;
+        codegen_block(cg, node->as.for_stmt.body);
+        cg->loop_depth = saved_loop;
+        cg->break_target = saved_brk;
+        cg->continue_target = saved_cont;
+        if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(cg->builder)))
+            LLVMBuildBr(cg->builder, incr_bb);
+
+        /* Increment: i++ */
+        LLVMPositionBuilderAtEnd(cg->builder, incr_bb);
+        LLVMValueRef cur_idx2 = LLVMBuildLoad2(cg->builder, i64, idx_alloca, "for.i2");
+        LLVMValueRef next = LLVMBuildAdd(cg->builder, cur_idx2, LLVMConstInt(i64, 1, 0), "for.next");
+        LLVMBuildStore(cg->builder, next, idx_alloca);
+        LLVMBuildBr(cg->builder, cond_bb);
+
+        LLVMPositionBuilderAtEnd(cg->builder, end_bb);
+        return;
+    }
+
+    /* String iteration: for char in str / for char in "literal" */
+    int is_string_iter = 0;
+    LLVMValueRef str_ptr = NULL;
+    if (node->as.for_stmt.iter) {
+        if (node->as.for_stmt.iter->type == NODE_IDENTIFIER) {
+            const char *vn = node->as.for_stmt.iter->as.ident.name;
+            const char *tn = var_lookup_type_name(cg, vn);
+            if (tn && strcmp(tn, "string") == 0) {
+                is_string_iter = 1;
+                str_ptr = var_lookup(cg, vn);
+                if (str_ptr) {
+                    LLVMTypeRef str_ty = var_lookup_type(cg, vn);
+                    if (str_ty)
+                        str_ptr = LLVMBuildLoad2(cg->builder, str_ty, str_ptr, "str.deref");
+                }
+            }
+        } else if (node->as.for_stmt.iter->type == NODE_STRING_LIT) {
+            is_string_iter = 1;
+            str_ptr = codegen_expr(cg, node->as.for_stmt.iter);
+        }
+    }
+
+    if (is_string_iter && str_ptr) {
+        LLVMTypeRef i8 = LLVMInt8TypeInContext(cg->ctx);
+        LLVMTypeRef i8ptr = LLVMPointerType(i8, 0);
+        LLVMValueRef zero8 = LLVMConstInt(i8, 0, 0);
+        LLVMValueRef one64 = LLVMConstInt(i64, 1, 0);
+
+        /* Index variable: i = 0 */
+        LLVMValueRef idx_alloca = LLVMBuildAlloca(cg->builder, i64, "for.idx");
+        var_push(cg, "__for_idx", idx_alloca, i64);
+        LLVMBuildStore(cg->builder, LLVMConstInt(i64, 0, 0), idx_alloca);
+
+        /* Loop variable: char (typed as i8) */
+        LLVMValueRef char_alloca = LLVMBuildAlloca(cg->builder, i8, node->as.for_stmt.var);
+        var_push(cg, node->as.for_stmt.var, char_alloca, i8);
+        var_set_type_name(cg, node->as.for_stmt.var, "char");
+        debug_create_variable(cg, node->as.for_stmt.var, node->loc, i8, char_alloca);
+
+        LLVMBuildBr(cg->builder, cond_bb);
+
+        /* Condition: str[i] != '\0' */
+        LLVMPositionBuilderAtEnd(cg->builder, cond_bb);
+        LLVMValueRef cur_idx = LLVMBuildLoad2(cg->builder, i64, idx_alloca, "for.i");
+        LLVMValueRef elem_ptr = LLVMBuildGEP2(cg->builder, i8, str_ptr,
+            (LLVMValueRef[]){cur_idx}, 1, "ch.ptr");
+        LLVMValueRef ch = LLVMBuildLoad2(cg->builder, i8, elem_ptr, "ch");
+        LLVMValueRef cmp = LLVMBuildICmp(cg->builder, LLVMIntNE, ch, zero8, "for.cmp");
+        LLVMBuildCondBr(cg->builder, cmp, body_bb, end_bb);
+
+        /* Body: store char, execute body */
+        LLVMPositionBuilderAtEnd(cg->builder, body_bb);
+        LLVMBuildStore(cg->builder, ch, char_alloca);
+
+        int saved_loop = cg->loop_depth;
+        LLVMBasicBlockRef saved_brk = cg->break_target;
+        LLVMBasicBlockRef saved_cont = cg->continue_target;
+        cg->loop_depth++;
+        cg->break_target = end_bb;
+        cg->continue_target = incr_bb;
+        codegen_block(cg, node->as.for_stmt.body);
+        cg->loop_depth = saved_loop;
+        cg->break_target = saved_brk;
+        cg->continue_target = saved_cont;
+        if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(cg->builder)))
+            LLVMBuildBr(cg->builder, incr_bb);
+
+        /* Increment: i++ */
+        LLVMPositionBuilderAtEnd(cg->builder, incr_bb);
+        LLVMValueRef cur_idx2 = LLVMBuildLoad2(cg->builder, i64, idx_alloca, "for.i2");
+        LLVMValueRef next = LLVMBuildAdd(cg->builder, cur_idx2, one64, "for.next");
+        LLVMBuildStore(cg->builder, next, idx_alloca);
+        LLVMBuildBr(cg->builder, cond_bb);
+
+        LLVMPositionBuilderAtEnd(cg->builder, end_bb);
+        return;
+    }
+
+    /* Range/integer iteration (original code) */
     LLVMValueRef range_start = NULL, range_end = NULL;
     if (node->as.for_stmt.iter && node->as.for_stmt.iter->type == NODE_RANGE) {
         range_start = codegen_expr(cg, node->as.for_stmt.iter->as.range.start);
@@ -276,8 +566,8 @@ static void codegen_for(CodegenCtx *cg, AstNode *node) {
 
     LLVMPositionBuilderAtEnd(cg->builder, cond_bb);
     LLVMValueRef cur = LLVMBuildLoad2(cg->builder, i64, alloca_inst, "for.i");
-    LLVMValueRef cmp = LLVMBuildICmp(cg->builder, LLVMIntSLT, cur, range_end, "for.cmp");
-    LLVMBuildCondBr(cg->builder, cmp, body_bb, end_bb);
+    LLVMValueRef cmp2 = LLVMBuildICmp(cg->builder, LLVMIntSLT, cur, range_end, "for.cmp");
+    LLVMBuildCondBr(cg->builder, cmp2, body_bb, end_bb);
 
     LLVMPositionBuilderAtEnd(cg->builder, body_bb);
     int saved_loop = cg->loop_depth;
@@ -295,8 +585,8 @@ static void codegen_for(CodegenCtx *cg, AstNode *node) {
 
     LLVMPositionBuilderAtEnd(cg->builder, incr_bb);
     LLVMValueRef cur2 = LLVMBuildLoad2(cg->builder, i64, alloca_inst, "for.i2");
-    LLVMValueRef next = LLVMBuildAdd(cg->builder, cur2, LLVMConstInt(i64, 1, 0), "for.next");
-    LLVMBuildStore(cg->builder, next, alloca_inst);
+    LLVMValueRef next2 = LLVMBuildAdd(cg->builder, cur2, LLVMConstInt(i64, 1, 0), "for.next");
+    LLVMBuildStore(cg->builder, next2, alloca_inst);
     LLVMBuildBr(cg->builder, cond_bb);
 
     LLVMPositionBuilderAtEnd(cg->builder, end_bb);

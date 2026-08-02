@@ -15,7 +15,7 @@ typedef enum {
     TOK_IDENT,
 
     /* Keywords */
-    TOK_INT, TOK_VOID, TOK_STRING, TOK_BOOL, TOK_FLOAT,
+    TOK_INT, TOK_VOID, TOK_STRING, TOK_BOOL, TOK_FLOAT, TOK_CHAR,
     TOK_STRUCT, TOK_CLASS, TOK_EXTENDS,
     TOK_IF, TOK_ELSE, TOK_SWITCH, TOK_CASE, TOK_MATCH,
     TOK_FOR, TOK_WHILE, TOK_RETURN, TOK_IN,
@@ -133,6 +133,8 @@ typedef enum {
     NODE_TYPEDEF_DECL,
     NODE_DECORATOR,      /* @name or @name(args) applied to a declaration */
     NODE_GENERIC_INST,   /* Generic type instantiation: Foo[T] */
+    NODE_ARRAY_LIT,      /* Array literal: [1, 2, 3] */
+    NODE_INDEX,          /* Array index: arr[i] */
 } NodeType;
 
 /* ------------------------------------------------------------------ */
@@ -185,13 +187,13 @@ struct AstNode {
         struct { char *name; NodeList fields; NodeList decorators; } struct_decl;
 
         /* NODE_CLASS_DECL */
-        struct { char *name; char *parent; NodeList fields; NodeList methods; NodeList decorators; } class_decl;
+        struct { char *name; char *parent; NodeList fields; NodeList methods; NodeList decorators; char **generic_params; size_t generic_count; int generic_dispatch; } class_decl;
 
         /* NODE_FUNC_DECL */
         struct { char *ret_type; char *name; char *class_name; NodeList params; AstNode *body; int is_method; NodeList decorators; char **generic_params; size_t generic_count; int generic_dispatch; /* 0=static, 1=dynamic */ } func_decl;
 
         /* NODE_PARAM */
-        struct { char *type; char *name; int is_borrow; int is_lock; } param;
+        struct { char *type; char *name; int is_borrow; int is_lock; int is_self; } param;
 
         /* NODE_BLOCK */
         struct { NodeList stmts; } block;
@@ -334,6 +336,12 @@ struct AstNode {
 
         /* NODE_GENERIC_INST */
         struct { char *base_name; NodeList type_args; } generic_inst;
+
+        /* NODE_ARRAY_LIT */
+        struct { NodeList elements; } array_lit;
+
+        /* NODE_INDEX */
+        struct { AstNode *object; AstNode *index; } index;
     } as;
 };
 
@@ -348,7 +356,7 @@ AstNode *ast_new_func_map(SrcLoc loc, const char *pc_name, const char *c_name);
 AstNode *ast_new_struct_decl(SrcLoc loc, const char *name);
 AstNode *ast_new_class_decl(SrcLoc loc, const char *name, const char *parent);
 AstNode *ast_new_func_decl(SrcLoc loc, const char *ret_type, const char *name, int is_method);
-AstNode *ast_new_param(SrcLoc loc, const char *type, const char *name, int is_borrow, int is_lock);
+AstNode *ast_new_param(SrcLoc loc, const char *type, const char *name, int is_borrow, int is_lock, int is_self);
 AstNode *ast_new_block(SrcLoc loc);
 AstNode *ast_new_return(SrcLoc loc, AstNode *value);
 AstNode *ast_new_if(SrcLoc loc, AstNode *cond, AstNode *then_blk, AstNode *else_blk);
@@ -396,5 +404,7 @@ AstNode *ast_new_union_decl(SrcLoc loc, const char *name);
 AstNode *ast_new_typedef_decl(SrcLoc loc, const char *orig_type, const char *new_name);
 AstNode *ast_new_decorator(SrcLoc loc, const char *name, AstNode *target);
 AstNode *ast_new_generic_inst(SrcLoc loc, const char *base_name);
+AstNode *ast_new_array_lit(SrcLoc loc);
+AstNode *ast_new_index(SrcLoc loc, AstNode *object, AstNode *index);
 
 #endif /* PENGUINC_AST_H */

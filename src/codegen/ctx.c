@@ -275,3 +275,23 @@ AstNode *generic_func_lookup(CodegenCtx *cg, const char *name) {
     }
     return NULL;
 }
+
+/* Generic class registry */
+void generic_class_push(CodegenCtx *cg, const char *name, AstNode *decl, int dispatch) {
+    if (cg->generic_class_count >= cg->generic_class_cap) {
+        cg->generic_class_cap = cg->generic_class_cap ? cg->generic_class_cap * 2 : 16;
+        cg->generic_classes = realloc(cg->generic_classes, cg->generic_class_cap * sizeof(*cg->generic_classes));
+    }
+    cg->generic_classes[cg->generic_class_count].name = strdup(name);
+    cg->generic_classes[cg->generic_class_count].decl = decl;
+    cg->generic_classes[cg->generic_class_count].dispatch = dispatch;
+    cg->generic_class_count++;
+}
+
+AstNode *generic_class_lookup(CodegenCtx *cg, const char *name) {
+    for (size_t i = cg->generic_class_count; i > 0; i--) {
+        if (strcmp(cg->generic_classes[i - 1].name, name) == 0)
+            return cg->generic_classes[i - 1].decl;
+    }
+    return NULL;
+}

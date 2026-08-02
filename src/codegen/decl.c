@@ -27,17 +27,27 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
 
     int is_method = node->as.func_decl.is_method;
     size_t user_param_count = node->as.func_decl.params.count;
-    size_t total_params = user_param_count + (is_method ? 1 : 0);
+    int has_explicit_self = (is_method && user_param_count > 0 &&
+                             node->as.func_decl.params.items[0]->as.param.is_self);
+    size_t total_params = user_param_count + (is_method && !has_explicit_self ? 1 : 0);
     LLVMTypeRef *param_types = total_params > 0
         ? malloc(total_params * sizeof(LLVMTypeRef)) : NULL;
 
     size_t pi = 0;
-    if (is_method) {
+    if (is_method && !has_explicit_self) {
         param_types[pi++] = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
     }
     for (size_t i = 0; i < user_param_count; i++) {
         AstNode *p = node->as.func_decl.params.items[i];
-        param_types[pi++] = resolve_type(cg, p->as.param.type);
+        if (p->as.param.is_self && node->as.func_decl.class_name) {
+            LLVMTypeRef class_ty = struct_lookup(cg, node->as.func_decl.class_name);
+            if (class_ty)
+                param_types[pi++] = LLVMPointerType(class_ty, 0);
+            else
+                param_types[pi++] = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
+        } else {
+            param_types[pi++] = resolve_type(cg, p->as.param.type);
+        }
     }
 
     LLVMTypeRef fn_type = LLVMFunctionType(ret_ty, param_types,
@@ -80,10 +90,12 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     for (unsigned i = 0; i < actual_params; i++) {
         LLVMValueRef param = LLVMGetParam(fn, i);
         const char *param_name;
-        if (node->as.func_decl.is_method && i == 0) {
+        if (has_explicit_self && i == 0) {
+            param_name = "self";
+        } else if (is_method && !has_explicit_self && i == 0) {
             param_name = "self";
         } else {
-            size_t pidx = node->as.func_decl.is_method ? i - 1 : i;
+            size_t pidx = is_method ? i - (has_explicit_self ? 0 : 1) : i;
             if (pidx < node->as.func_decl.params.count) {
                 param_name = node->as.func_decl.params.items[pidx]->as.param.name;
             } else {
@@ -102,17 +114,16 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
                                node->loc, pty, alloca_inst);
         }
 
-        if (!node->as.func_decl.is_method || i != 0) {
-            size_t pidx = node->as.func_decl.is_method ? i - 1 : i;
+        if (is_method && i == 0 && node->as.func_decl.class_name) {
+            LLVMTypeRef class_ty = struct_lookup(cg, node->as.func_decl.class_name);
+            if (class_ty) var_set_elem_type(cg, param_name, class_ty);
+            var_set_struct_name(cg, param_name, node->as.func_decl.class_name);
+        } else {
+            size_t pidx = is_method ? i - (has_explicit_self ? 0 : 1) : i;
             if (pidx < node->as.func_decl.params.count) {
                 const char *pty_name = node->as.func_decl.params.items[pidx]->as.param.type;
                 if (pty_name) var_set_type_name(cg, param_name, pty_name);
             }
-        }
-        if (node->as.func_decl.is_method && i == 0 && node->as.func_decl.class_name) {
-            LLVMTypeRef class_ty = struct_lookup(cg, node->as.func_decl.class_name);
-            if (class_ty) var_set_elem_type(cg, param_name, class_ty);
-            var_set_struct_name(cg, param_name, node->as.func_decl.class_name);
         }
     }
 
@@ -184,6 +195,13 @@ static void codegen_typedef_decl(CodegenCtx *cg, AstNode *node) {
 }
 
 static void codegen_class_decl(CodegenCtx *cg, AstNode *decl) {
+    /* Generic classes: store template only, monomorphize on new<T>() */
+    if (decl->as.class_decl.generic_count > 0) {
+        generic_class_push(cg, decl->as.class_decl.name, decl,
+                           decl->as.class_decl.generic_dispatch);
+        return;
+    }
+
     class_push(cg, decl->as.class_decl.name, decl->as.class_decl.parent);
 
     size_t parent_field_count = 0;

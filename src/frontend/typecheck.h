@@ -9,6 +9,7 @@ typedef enum {
     TC_BOOL,
     TC_VOID,
     TC_STRING,
+    TC_CHAR,
     TC_STRUCT,
     TC_CLASS,
     TC_ENUM,

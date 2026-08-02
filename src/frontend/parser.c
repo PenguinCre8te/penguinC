@@ -99,7 +99,7 @@ static int is_ident_like_type(void) {
     switch (cur()->type) {
         case TOK_IDENT:
         case TOK_INT: case TOK_VOID: case TOK_STRING:
-        case TOK_BOOL: case TOK_FLOAT:
+        case TOK_BOOL: case TOK_FLOAT: case TOK_CHAR:
         case TOK_LOCK:
         case TOK_CONST: case TOK_VOLATILE:
         case TOK_STRUCT: case TOK_UNION: case TOK_ENUM:
@@ -422,7 +422,7 @@ static AstNode *parse_param(void) {
     AstNode *type = parse_type();
     Token name = expect(TOK_IDENT);
     check_var_camel_case(name.loc, name.value);
-    return ast_new_param(loc, type_node_name(type), name.value, is_borrow, 0);
+    return ast_new_param(loc, type_node_name(type), name.value, is_borrow, 0, 0);
 }
 
 static NodeList parse_param_list(void) {
@@ -929,7 +929,24 @@ static AstNode *parse_class_decl(void) {
                 adv();
             if (cur_is(TOK_LPAREN)) {
                 expect(TOK_LPAREN);
-                NodeList params = parse_param_list();
+                NodeList params;
+                nodelist_init(&params);
+                /* All class methods require 'self' as first parameter (like Python) */
+                if (!cur_is(TOK_SELF)) {
+                    error_at(cur()->loc, ERR_PARSER,
+                             "class method '%s' requires 'self' as first parameter",
+                             method_name.value);
+                }
+                SrcLoc self_loc = cur()->loc;
+                adv(); /* consume self */
+                nodelist_push(&params, ast_new_param(self_loc, NULL, "self", 0, 0, 1));
+                match(TOK_COMMA);
+                if (!cur_is(TOK_RPAREN)) {
+                    nodelist_push(&params, parse_param());
+                    while (match(TOK_COMMA)) {
+                        nodelist_push(&params, parse_param());
+                    }
+                }
                 expect(TOK_RPAREN);
                 AstNode *body = parse_block();
                 AstNode *method = ast_new_func_decl(method_name.loc,
@@ -1140,6 +1157,26 @@ static AstNode *parse_header_file(const char *filepath) {
                             char *args_str = open_paren + 1;
                             char *close_paren = strchr(args_str, ')');
                             if (close_paren) *close_paren = '\0';
+
+                            /* All class methods require 'self' as first param */
+                            {
+                                char *first_arg = trim(args_str);
+                                size_t first_len = 0;
+                                while (first_arg[first_len] && first_arg[first_len] != ',' &&
+                                       first_arg[first_len] != ' ' && first_arg[first_len] != '\t')
+                                    first_len++;
+                                if (first_len != 4 || strncmp(first_arg, "self", 4) != 0) {
+                                    /* error in .ph: class method requires self as first parameter */
+                                } else {
+                                    /* skip 'self' param in mangled name generation */
+                                    char *after_self = strchr(first_arg, ',');
+                                    if (after_self) {
+                                        args_str = trim(after_self + 1);
+                                    } else {
+                                        args_str = first_arg + first_len;
+                                    }
+                                }
+                            }
 
                             /* Extract return type - try '->' after paren, else before method name */
                             char ret_type[256] = "void";
@@ -1566,8 +1603,27 @@ static AstNode *parse_decorator(void) {
     /* Optional argument list: @name(arg1, arg2, ...) */
     if (match(TOK_LPAREN)) {
         while (!cur_is(TOK_RPAREN) && !cur_is(TOK_EOF)) {
-            AstNode *arg = parse_expr();
-            nodelist_push(&dec->as.decorator.args, arg);
+            /* Handle key=value pairs: dispatch=static */
+            if (cur_is(TOK_IDENT) && peek_is(TOK_ASSIGN)) {
+                Token key = *cur();
+                adv(); /* consume key */
+                adv(); /* consume '=' */
+                AstNode *val;
+                /* Value can be an ident or a keyword used as name */
+                if (cur_is(TOK_IDENT) || cur_is(TOK_STATIC)) {
+                    Token vtok = *cur();
+                    adv();
+                    val = ast_new_ident(cur()->loc, vtok.value);
+                } else {
+                    val = parse_expr();
+                }
+                /* Create binary node: key = val */
+                AstNode *kv = ast_new_binary(loc, "=", ast_new_ident(loc, key.value), val);
+                nodelist_push(&dec->as.decorator.args, kv);
+            } else {
+                AstNode *arg = parse_expr();
+                nodelist_push(&dec->as.decorator.args, arg);
+            }
             if (!match(TOK_COMMA)) break;
         }
         expect(TOK_RPAREN);
@@ -1607,27 +1663,27 @@ static AstNode *parse_top_level(void) {
                     nodelist_push(target_list, dec);
 
                     /* Special handling for @generics decorator */
-                    if (decl->type == NODE_FUNC_DECL &&
-                        strcmp(dec->as.decorator.name, "generics") == 0) {
+                    if (strcmp(dec->as.decorator.name, "generics") == 0) {
                         /* Extract type parameter names and dispatch mode from args */
                         size_t gp_count = dec->as.decorator.args.count;
-                        decl->as.func_decl.generic_dispatch = 0; /* static by default */
+                        char **gp_names = NULL;
+                        size_t gp_actual = 0;
+                        int gp_dispatch = 0;
+
                         if (gp_count > 0) {
                             /* First pass: count actual type params (skip dispatch=...) */
-                            size_t type_param_count = 0;
                             for (size_t g = 0; g < gp_count; g++) {
                                 AstNode *arg = dec->as.decorator.args.items[g];
                                 if (arg->type == NODE_BINARY &&
                                     strcmp(arg->as.binary.op, "=") == 0 &&
                                     arg->as.binary.left->type == NODE_IDENTIFIER &&
                                     strcmp(arg->as.binary.left->as.ident.name, "dispatch") == 0) {
-                                    /* dispatch=... handled below */
+                                    /* skip */
                                 } else {
-                                    type_param_count++;
+                                    gp_actual++;
                                 }
                             }
-                            decl->as.func_decl.generic_count = type_param_count;
-                            decl->as.func_decl.generic_params = malloc(type_param_count * sizeof(char *));
+                            gp_names = malloc(gp_actual * sizeof(char *));
                             size_t gi = 0;
                             for (size_t g = 0; g < gp_count; g++) {
                                 AstNode *arg = dec->as.decorator.args.items[g];
@@ -1635,20 +1691,28 @@ static AstNode *parse_top_level(void) {
                                     strcmp(arg->as.binary.op, "=") == 0 &&
                                     arg->as.binary.left->type == NODE_IDENTIFIER &&
                                     strcmp(arg->as.binary.left->as.ident.name, "dispatch") == 0) {
-                                    /* dispatch=static or dispatch=dynamic */
                                     AstNode *val = arg->as.binary.right;
-                                    if (val->type == NODE_IDENTIFIER) {
-                                        if (strcmp(val->as.ident.name, "dynamic") == 0)
-                                            decl->as.func_decl.generic_dispatch = 1;
-                                        else
-                                            decl->as.func_decl.generic_dispatch = 0;
-                                    }
+                                    if (val->type == NODE_IDENTIFIER &&
+                                        strcmp(val->as.ident.name, "dynamic") == 0)
+                                        gp_dispatch = 1;
                                 } else if (arg->type == NODE_IDENTIFIER) {
-                                    decl->as.func_decl.generic_params[gi++] = strdup(arg->as.ident.name);
+                                    gp_names[gi++] = strdup(arg->as.ident.name);
                                 } else {
-                                    decl->as.func_decl.generic_params[gi++] = strdup("T");
+                                    gp_names[gi++] = strdup("T");
                                 }
                             }
+                        }
+
+                        if (decl->type == NODE_FUNC_DECL) {
+                            decl->as.func_decl.generic_params = gp_names;
+                            decl->as.func_decl.generic_count = gp_actual;
+                            decl->as.func_decl.generic_dispatch = gp_dispatch;
+                        } else if (decl->type == NODE_CLASS_DECL) {
+                            decl->as.class_decl.generic_params = gp_names;
+                            decl->as.class_decl.generic_count = gp_actual;
+                            decl->as.class_decl.generic_dispatch = gp_dispatch;
+                        } else {
+                            if (gp_names) free(gp_names);
                         }
                     }
                 }
@@ -1895,6 +1959,11 @@ static AstNode *parse_postfix(void) {
             Token member = *cur();
             adv();
             expr = ast_new_member(expr->loc, expr, member.value);
+        } else if (match(TOK_LBRACKET)) {
+            /* Array index: expr[expr] */
+            AstNode *idx = parse_expr();
+            expect(TOK_RBRACKET);
+            expr = ast_new_index(expr->loc, expr, idx);
         } else if (cur_is(TOK_PLUS_PLUS)) {
             SrcLoc loc = cur()->loc;
             adv();
@@ -2016,7 +2085,7 @@ static AstNode *parse_primary(void) {
 
         case TOK_IDENT:
         case TOK_INT: case TOK_VOID: case TOK_STRING:
-        case TOK_BOOL: case TOK_FLOAT:
+        case TOK_BOOL: case TOK_FLOAT: case TOK_CHAR:
         case TOK_LOCK: {
             Token t = *cur();
             adv();
@@ -2112,6 +2181,20 @@ static AstNode *parse_primary(void) {
             adv();
             expect(TOK_RPAREN);
             return ast_new_sizeof_expr(loc, type_name.value);
+        }
+
+        case TOK_LBRACKET: {
+            /* Array literal: [expr, expr, ...] */
+            adv();
+            AstNode *arr = ast_new_array_lit(loc);
+            if (!cur_is(TOK_RBRACKET)) {
+                nodelist_push(&arr->as.array_lit.elements, parse_expr());
+                while (match(TOK_COMMA)) {
+                    nodelist_push(&arr->as.array_lit.elements, parse_expr());
+                }
+            }
+            expect(TOK_RBRACKET);
+            return arr;
         }
 
         default:

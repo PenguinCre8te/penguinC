@@ -68,6 +68,7 @@ static const Keyword keywords[] = {
     {"string",   TOK_STRING},
     {"bool",     TOK_BOOL},
     {"float",    TOK_FLOAT},
+    {"char",     TOK_CHAR},
     {"struct",   TOK_STRUCT},
     {"class",    TOK_CLASS},
     {"extends",  TOK_EXTENDS},
