@@ -6,19 +6,19 @@ int main() {
     string s = "100";
     int b = 1;
 
-    string sx = x.toS();
+    string sx = x.to<string>();
     console.println(sx);
 
-    int si = s.toI();
+    int si = s.to<int>();
     console.println_int(si);
 
-    string fx = x.toF().toS();
+    string fx = x.to<float>().to<string>();
     console.println(fx);
 
-    string sp = pi.toS();
+    string sp = pi.to<string>();
     console.println(sp);
 
-    string sb = b.toB().toS();
+    string sb = b.to<bool>().to<string>();
     console.println(sb);
 
     return 0;

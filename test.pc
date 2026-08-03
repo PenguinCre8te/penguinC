@@ -1,12 +1,12 @@
 #import std.console.(print, println)
 
-int main() {
-    string penguin = "penguin"
-    for ch in penguin {
-        println(ch)
-    }
+(int, int) thatNLarger(int number) {
+    return (number, number + 1)
+}
 
-    for ch in "penguin" {
-        println(ch)
-    }
+int main() {
+    (int, int) result = thatNLarger(5);
+    println(result.0);
+    println(result.1);
+    return 0
 }

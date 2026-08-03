@@ -45,6 +45,16 @@ static void free_tc_type(TCType *t) {
         free(t->pointee);
     }
     if (t->fn.param_kinds) free(t->fn.param_kinds);
+    if (t->tuple.elems) { free(t->tuple.elems); }
+}
+
+static TCType make_tuple_type(TCType *elems, size_t count) {
+    TCType t = {0};
+    t.kind = TC_TUPLE;
+    t.tuple.elems = malloc(count * sizeof(TCType));
+    memcpy(t.tuple.elems, elems, count * sizeof(TCType));
+    t.tuple.count = count;
+    return t;
 }
 
 static int types_equal(TCType a, TCType b) {
@@ -57,24 +67,48 @@ static int types_equal(TCType a, TCType b) {
         if (!a.pointee || !b.pointee) return 0;
         return types_equal(*a.pointee, *b.pointee);
     }
+    if (a.kind == TC_TUPLE) {
+        if (a.tuple.count != b.tuple.count) return 0;
+        for (size_t i = 0; i < a.tuple.count; i++) {
+            if (!types_equal(a.tuple.elems[i], b.tuple.elems[i])) return 0;
+        }
+        return 1;
+    }
     return 1;
 }
 
+static int is_int_type(TCTypeKind k) {
+    return k == TC_INT || k == TC_I8 || k == TC_I16 || k == TC_I32 || k == TC_I64 || k == TC_I128
+        || k == TC_U8 || k == TC_U16 || k == TC_U32 || k == TC_U64 || k == TC_U128
+        || k == TC_ISIZE || k == TC_USIZE || k == TC_CHAR;
+}
+
+static int is_float_type_tc(TCTypeKind k) {
+    return k == TC_FLOAT || k == TC_F32 || k == TC_F64;
+}
+
 static int is_numeric(TCType t) {
-    return t.kind == TC_INT || t.kind == TC_FLOAT;
+    return is_int_type(t.kind) || is_float_type_tc(t.kind);
 }
 
 static int is_coercible(TCType from, TCType to) {
     if (types_equal(from, to)) return 1;
     if (from.kind == TC_TYPE_ERROR || to.kind == TC_TYPE_ERROR) return 1;
     if (from.kind == TC_UNKNOWN) return 1;
-    if (to.kind == TC_UNKNOWN) return 1;  /* generic type parameter matches any type */
-    if (from.kind == TC_INT && to.kind == TC_FLOAT) return 1;
-    if (from.kind == TC_BOOL && to.kind == TC_INT) return 1;
-    if (from.kind == TC_FLOAT && to.kind == TC_INT) return 1;
-    if (from.kind == TC_INT && to.kind == TC_BOOL) return 1;
-    if (from.kind == TC_CHAR && to.kind == TC_INT) return 1;   /* char promotes to int */
-    if (from.kind == TC_INT && to.kind == TC_CHAR) return 1;   /* int demotes to char */
+    if (to.kind == TC_UNKNOWN) return 1;
+    if (is_int_type(from.kind) && is_int_type(to.kind)) return 1;
+    if (is_float_type_tc(from.kind) && is_float_type_tc(to.kind)) return 1;
+    if (is_int_type(from.kind) && is_float_type_tc(to.kind)) return 1;
+    if (is_float_type_tc(from.kind) && is_int_type(to.kind)) return 1;
+    if (from.kind == TC_BOOL && is_int_type(to.kind)) return 1;
+    if (is_int_type(from.kind) && to.kind == TC_BOOL) return 1;
+    if (from.kind == TC_TUPLE && to.kind == TC_TUPLE) {
+        if (from.tuple.count != to.tuple.count) return 0;
+        for (size_t i = 0; i < from.tuple.count; i++) {
+            if (!is_coercible(from.tuple.elems[i], to.tuple.elems[i])) return 0;
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -86,6 +120,20 @@ static const char *type_name_str(TCType t) {
         case TC_VOID:    return "void";
         case TC_STRING:  return "string";
         case TC_CHAR:    return "char";
+        case TC_I8:      return "i8";
+        case TC_I16:     return "i16";
+        case TC_I32:     return "i32";
+        case TC_I64:     return "i64";
+        case TC_I128:    return "i128";
+        case TC_U8:      return "u8";
+        case TC_U16:     return "u16";
+        case TC_U32:     return "u32";
+        case TC_U64:     return "u64";
+        case TC_U128:    return "u128";
+        case TC_ISIZE:   return "isize";
+        case TC_USIZE:   return "usize";
+        case TC_F32:     return "f32";
+        case TC_F64:     return "f64";
         case TC_STRUCT:  return t.name ? t.name : "struct";
         case TC_CLASS:   return t.name ? t.name : "class";
         case TC_ENUM:    return t.name ? t.name : "enum";
@@ -95,6 +143,23 @@ static const char *type_name_str(TCType t) {
             return buf;
         }
         case TC_FUNCTION: return "function";
+        case TC_TUPLE: {
+            static char buf[512];
+            size_t pos = 0;
+            buf[pos++] = '(';
+            for (size_t i = 0; i < t.tuple.count; i++) {
+                const char *elem_name = type_name_str(t.tuple.elems[i]);
+                size_t len = strlen(elem_name);
+                if (pos + len + 1 < sizeof(buf)) {
+                    memcpy(buf + pos, elem_name, len);
+                    pos += len;
+                }
+                if (i + 1 < t.tuple.count && pos < sizeof(buf) - 1) buf[pos++] = ',';
+            }
+            if (pos < sizeof(buf) - 1) buf[pos++] = ')';
+            buf[pos] = '\0';
+            return buf;
+        }
         case TC_UNKNOWN:  return "<unknown>";
         case TC_TYPE_ERROR: return "<error>";
     }
@@ -396,6 +461,34 @@ static TCType resolve_tc_type(TCContext *tc, const char *type_str) {
         /* Fall through to unknown */
     }
 
+    /* Tuple type: (T1,T2,...) */
+    if (resolved[0] == '(' && resolved[len - 1] == ')') {
+        TCType elems[32];
+        size_t count = 0;
+        const char *p = resolved + 1;
+        while (*p && *p != ')') {
+            /* find matching closing paren for nested types */
+            const char *comma = p;
+            int depth = 0;
+            while (*comma && *comma != ')' && (*comma != ',' || depth > 0)) {
+                if (*comma == '(') depth++;
+                else if (*comma == ')') depth--;
+                comma++;
+            }
+            char elem_str[256];
+            size_t elem_len = comma - p;
+            if (elem_len >= sizeof(elem_str)) elem_len = sizeof(elem_str) - 1;
+            memcpy(elem_str, p, elem_len);
+            elem_str[elem_len] = '\0';
+            if (count < 32) {
+                elems[count++] = resolve_tc_type(tc, elem_str);
+            }
+            p = comma;
+            if (*p == ',') p++;
+        }
+        return make_tuple_type(elems, count);
+    }
+
     if (strcmp(resolved, "int") == 0 || strcmp(resolved, "long") == 0)
         return make_type(TC_INT);
     if (strcmp(resolved, "float") == 0)
@@ -408,6 +501,20 @@ static TCType resolve_tc_type(TCContext *tc, const char *type_str) {
         return make_type(TC_STRING);
     if (strcmp(resolved, "char") == 0)
         return make_type(TC_CHAR);
+    if (strcmp(resolved, "i8") == 0)    return make_type(TC_I8);
+    if (strcmp(resolved, "i16") == 0)   return make_type(TC_I16);
+    if (strcmp(resolved, "i32") == 0)   return make_type(TC_I32);
+    if (strcmp(resolved, "i64") == 0)   return make_type(TC_I64);
+    if (strcmp(resolved, "i128") == 0)  return make_type(TC_I128);
+    if (strcmp(resolved, "u8") == 0)    return make_type(TC_U8);
+    if (strcmp(resolved, "u16") == 0)   return make_type(TC_U16);
+    if (strcmp(resolved, "u32") == 0)   return make_type(TC_U32);
+    if (strcmp(resolved, "u64") == 0)   return make_type(TC_U64);
+    if (strcmp(resolved, "u128") == 0)  return make_type(TC_U128);
+    if (strcmp(resolved, "isize") == 0) return make_type(TC_ISIZE);
+    if (strcmp(resolved, "usize") == 0) return make_type(TC_USIZE);
+    if (strcmp(resolved, "f32") == 0)   return make_type(TC_F32);
+    if (strcmp(resolved, "f64") == 0)   return make_type(TC_F64);
 
     if (tc_struct_lookup(tc, resolved))
         return make_struct_type(resolved);
@@ -691,13 +798,18 @@ static TCType tc_call(TCContext *tc, AstNode *node) {
         AstNode *obj = node->as.call.callee->as.member.object;
         const char *method = node->as.call.callee->as.member.member;
 
-        if (strcmp(method, "toI") == 0 || strcmp(method, "toF") == 0 ||
-            strcmp(method, "toS") == 0 || strcmp(method, "toB") == 0) {
+        /* Built-in type cast: expr.to<TargetType>() or expr.to<TargetType> */
+        if (strcmp(method, "to") == 0 && node->as.call.args.count == 1 &&
+            node->as.call.args.items[0]->type == NODE_GENERIC_INST) {
             tc_expr(tc, obj);
-            if (strcmp(method, "toI") == 0) return make_type(TC_INT);
-            if (strcmp(method, "toF") == 0) return make_type(TC_FLOAT);
-            if (strcmp(method, "toS") == 0) return make_type(TC_STRING);
-            if (strcmp(method, "toB") == 0) return make_type(TC_BOOL);
+            const char *target = node->as.call.args.items[0]->as.generic_inst.base_name;
+            TCType resolved = resolve_tc_type(tc, target);
+            if (resolved.kind == TC_UNKNOWN) {
+                tc_error(tc, node->as.call.args.items[0]->loc,
+                    "unknown target type '%s' in cast", target);
+                return make_type(TC_TYPE_ERROR);
+            }
+            return resolved;
         }
 
         for (size_t i = 0; i < node->as.call.args.count; i++)
@@ -937,6 +1049,35 @@ static TCType tc_expr(TCContext *tc, AstNode *node) {
             tc_expr(tc, node->as.index.object);
             tc_expr(tc, node->as.index.index);
             return make_type(TC_INT);
+        }
+        case NODE_TUPLE_LIT: {
+            /* Tuple literal: (expr, expr, ...) */
+            size_t count = node->as.tuple_lit.elements.count;
+            TCType *elems = malloc(count * sizeof(TCType));
+            for (size_t i = 0; i < count; i++) {
+                elems[i] = tc_expr(tc, node->as.tuple_lit.elements.items[i]);
+            }
+            TCType result = make_tuple_type(elems, count);
+            free(elems);
+            return result;
+        }
+        case NODE_TUPLE_FIELD: {
+            /* Tuple field access: expr.0 */
+            TCType obj_type = tc_expr(tc, node->as.tuple_field.object);
+            if (obj_type.kind != TC_TUPLE) {
+                tc_error(tc, node->loc,
+                    "cannot access tuple field on non-tuple type '%s'",
+                    type_name_str(obj_type));
+                return make_type(TC_TYPE_ERROR);
+            }
+            long idx = node->as.tuple_field.index;
+            if (idx < 0 || (size_t)idx >= obj_type.tuple.count) {
+                tc_error(tc, node->loc,
+                    "tuple index %ld out of range (tuple has %zu elements)",
+                    idx, obj_type.tuple.count);
+                return make_type(TC_TYPE_ERROR);
+            }
+            return obj_type.tuple.elems[idx];
         }
         case NODE_STMT_EXPR:    return tc_expr(tc, node->as.stmt_expr.expr);
         default: return make_type(TC_UNKNOWN);

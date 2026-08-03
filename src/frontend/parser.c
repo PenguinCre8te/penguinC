@@ -366,6 +366,55 @@ static AstNode *parse_type(void) {
         return ast_new_borrow_expr(loc, inner, is_mut);
     }
 
+    /* Tuple type: (T1, T2, ...) */
+    if (cur_is(TOK_LPAREN)) {
+        SrcLoc tloc = cur()->loc;
+        adv(); /* consume ( */
+        AstNode *first = parse_type();
+        if (match(TOK_COMMA)) {
+            /* It's a tuple type */
+            char base[512];
+            size_t pos = 0;
+            base[pos++] = '(';
+            const char *first_name = type_node_name(first);
+            size_t flen = strlen(first_name);
+            if (pos + flen < sizeof(base)) {
+                memcpy(base + pos, first_name, flen);
+                pos += flen;
+            }
+            /* parse remaining types */
+            AstNode *elem = parse_type();
+            while (elem) {
+                const char *ename = type_node_name(elem);
+                size_t elen = strlen(ename);
+                if (pos + elen + 1 < sizeof(base)) {
+                    base[pos++] = ',';
+                    memcpy(base + pos, ename, elen);
+                    pos += elen;
+                }
+                if (!match(TOK_COMMA)) break;
+                elem = parse_type();
+            }
+            expect(TOK_RPAREN);
+            if (pos < sizeof(base) - 1) base[pos++] = ')';
+            base[pos] = '\0';
+            /* pointer suffix on tuple type */
+            while (match(TOK_STAR)) {
+                size_t len = strlen(base);
+                if (len < sizeof(base) - 1) {
+                    base[len] = '*';
+                    base[len + 1] = '\0';
+                }
+            }
+            return ast_new_ident(tloc, base);
+        }
+        /* Single parenthesized type — not a tuple, just (type) */
+        expect(TOK_RPAREN);
+        /* pointer suffix */
+        while (match(TOK_STAR)) { /* TODO: handle pointer to grouped type */ }
+        return first;
+    }
+
     /* base type: any identifier or type keyword in type position */
     if (!is_ident_like_type()) {
         error_at(cur()->loc, ERR_PARSER,
@@ -751,6 +800,25 @@ static AstNode *parse_var_decl_or_expr(void) {
         }
         /* Not a var decl — backtrack not possible here, fall through to expr */
         /* The type was already consumed; this is a parse error handled elsewhere */
+    }
+
+    /* Tuple type heuristic: (type, type) IDENT = var decl */
+    if (cur_is(TOK_LPAREN)) {
+        /* Save lexer position */
+        Lexer saved_lex = *P;
+        AstNode *type = parse_type();
+        if (cur_is(TOK_IDENT)) {
+            Token name = expect(TOK_IDENT);
+            check_var_camel_case(name.loc, name.value);
+            AstNode *init = NULL;
+            if (match(TOK_ASSIGN)) {
+                init = parse_expr();
+            }
+            match(TOK_SEMICOLON);
+            return ast_new_var_decl(loc, type_node_name(type), name.value, init, 0, 0);
+        }
+        /* Not a tuple var decl — restore and fall through to expr */
+        *P = saved_lex;
     }
 
     /* Dotted type heuristic: IDENT.IDENT IDENT = var decl (e.g. threads.thread thread) */
@@ -1228,11 +1296,19 @@ static AstNode *parse_header_file(const char *filepath) {
                                         param_types[param_count++] = t;
                                     if (strchr(a, '*'))
                                         mangled[mpos++] = 'p';
-                                    else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0) mangled[mpos++] = 'i';
-                                    else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                                    else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0 || strcmp(t, "i64") == 0 || strcmp(t, "u64") == 0) mangled[mpos++] = '2';
+                                    else if (strcmp(t, "float") == 0 || strcmp(t, "f64") == 0) mangled[mpos++] = 'f';
                                     else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
                                     else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
                                     else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                                    else if (strcmp(t, "char") == 0)  mangled[mpos++] = 'c';
+                                    else if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0)   mangled[mpos++] = '8';
+                                    else if (strcmp(t, "i16") == 0 || strcmp(t, "u16") == 0) mangled[mpos++] = '6';
+                                    else if (strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0) mangled[mpos++] = '4';
+                                    else if (strcmp(t, "i128") == 0 || strcmp(t, "u128") == 0) mangled[mpos++] = 'Q';
+                                    else if (strcmp(t, "isize") == 0) mangled[mpos++] = 'S';
+                                    else if (strcmp(t, "usize") == 0) mangled[mpos++] = 'U';
+                                    else if (strcmp(t, "f32") == 0)   mangled[mpos++] = 'F';
                                     else {
                                         size_t tlen = strlen(t);
                                         mangled[mpos++] = 'p';
@@ -1348,11 +1424,19 @@ static AstNode *parse_header_file(const char *filepath) {
                             /* If type has *, it's a pointer → mangle as 'p' */
                             if (strchr(a, '*')) {
                                 mangled[mpos++] = 'p';
-                            } else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0)  mangled[mpos++] = 'i';
-                            else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                            } else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0 || strcmp(t, "i64") == 0 || strcmp(t, "u64") == 0)  mangled[mpos++] = '2';
+                            else if (strcmp(t, "float") == 0 || strcmp(t, "f64") == 0) mangled[mpos++] = 'f';
                             else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
                             else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
                             else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                            else if (strcmp(t, "char") == 0)  mangled[mpos++] = 'c';
+                            else if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0)   mangled[mpos++] = '8';
+                            else if (strcmp(t, "i16") == 0 || strcmp(t, "u16") == 0) mangled[mpos++] = '6';
+                            else if (strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0) mangled[mpos++] = '4';
+                            else if (strcmp(t, "i128") == 0 || strcmp(t, "u128") == 0) mangled[mpos++] = 'Q';
+                            else if (strcmp(t, "isize") == 0) mangled[mpos++] = 'S';
+                            else if (strcmp(t, "usize") == 0) mangled[mpos++] = 'U';
+                            else if (strcmp(t, "f32") == 0)   mangled[mpos++] = 'F';
                             else {
                                 size_t tlen = strlen(t);
                                 mangled[mpos++] = 'p';
@@ -1545,10 +1629,18 @@ static AstNode *parse_pc_file(const char *filepath) {
                             if (strchr(a, '*'))
                                 mangled[mpos++] = 'p';
                             else if (strcmp(t, "int") == 0 || strcmp(t, "long") == 0) mangled[mpos++] = 'i';
-                            else if (strcmp(t, "float") == 0) mangled[mpos++] = 'f';
+                            else if (strcmp(t, "float") == 0 || strcmp(t, "f64") == 0) mangled[mpos++] = 'f';
                             else if (strcmp(t, "bool") == 0)  mangled[mpos++] = 'b';
                             else if (strcmp(t, "string") == 0) mangled[mpos++] = 's';
                             else if (strcmp(t, "void") == 0)  mangled[mpos++] = 'v';
+                            else if (strcmp(t, "char") == 0)  mangled[mpos++] = 'c';
+                            else if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0)   mangled[mpos++] = '8';
+                            else if (strcmp(t, "i16") == 0 || strcmp(t, "u16") == 0) mangled[mpos++] = '6';
+                            else if (strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0) mangled[mpos++] = '4';
+                            else if (strcmp(t, "i128") == 0 || strcmp(t, "u128") == 0) mangled[mpos++] = 'Q';
+                            else if (strcmp(t, "isize") == 0) mangled[mpos++] = 'S';
+                            else if (strcmp(t, "usize") == 0) mangled[mpos++] = 'U';
+                            else if (strcmp(t, "f32") == 0)   mangled[mpos++] = 'F';
                             else {
                                 size_t tlen = strlen(t);
                                 mangled[mpos++] = 'p';
@@ -1796,6 +1888,29 @@ static AstNode *parse_top_level(void) {
                 *P = saved;
                 return parse_func_decl(0);
             }
+            /* Tuple return type heuristic: (type, type) name(...) { ... } */
+            if (cur_is(TOK_LPAREN)) {
+                Lexer saved = *P;
+                AstNode *type = parse_type();
+                if (cur_is(TOK_IDENT) && peek_is(TOK_LPAREN)) {
+                    /* Looks like (type, type) name(... — function decl */
+                    *P = saved;
+                    return parse_func_decl(0);
+                }
+                /* Also handle (type, type) name = init — top-level tuple var decl */
+                if (cur_is(TOK_IDENT) && (peek_is(TOK_ASSIGN) || peek_is(TOK_SEMICOLON))) {
+                    *P = saved;
+                    SrcLoc loc = cur()->loc;
+                    AstNode *t = parse_type();
+                    Token nm = expect(TOK_IDENT);
+                    check_var_camel_case(nm.loc, nm.value);
+                    AstNode *init = NULL;
+                    if (match(TOK_ASSIGN)) init = parse_expr();
+                    match(TOK_SEMICOLON);
+                    return ast_new_var_decl(loc, type_node_name(t), nm.value, init, 0, 0);
+                }
+                *P = saved;
+            }
             error_at(cur()->loc, ERR_PARSER,
                      "expected top-level declaration, got '%s'",
                      token_type_name(cur()->type));
@@ -1956,9 +2071,41 @@ static AstNode *parse_postfix(void) {
             expect(TOK_RPAREN);
             expr = call;
         } else if (match(TOK_DOT)) {
-            Token member = *cur();
-            adv();
-            expr = ast_new_member(expr->loc, expr, member.value);
+            /* Tuple field access: expr.0, expr.1 */
+            if (cur_is(TOK_INT_LIT)) {
+                Token t = *cur();
+                long idx = strtol(t.value, NULL, 10);
+                adv();
+                expr = ast_new_tuple_field(expr->loc, expr, idx);
+            } else {
+                Token member = *cur();
+                adv();
+                expr = ast_new_member(expr->loc, expr, member.value);
+                /* Handle .to<type>() and .to<type> generic cast syntax */
+                if (strcmp(member.value, "to") == 0 && cur_is(TOK_LT)) {
+                    SrcLoc loc = cur()->loc;
+                    adv(); /* consume < */
+                    AstNode *type_arg = parse_type();
+                    expect(TOK_GT);
+                    /* Build generic inst for the type arg */
+                    AstNode *gen = ast_new_generic_inst(loc, type_node_name(type_arg));
+                    /* Build call: expr.to(args) with generic type arg as first arg */
+                    AstNode *to_member = ast_new_member(expr->loc, expr, "to");
+                    AstNode *call = ast_new_call(expr->loc, to_member);
+                    nodelist_push(&call->as.call.args, gen);
+                    if (cur_is(TOK_LPAREN)) {
+                        adv(); /* consume ( */
+                        if (!cur_is(TOK_RPAREN)) {
+                            nodelist_push(&call->as.call.args, parse_expr());
+                            while (match(TOK_COMMA)) {
+                                nodelist_push(&call->as.call.args, parse_expr());
+                            }
+                        }
+                        expect(TOK_RPAREN);
+                    }
+                    expr = call;
+                }
+            }
         } else if (match(TOK_LBRACKET)) {
             /* Array index: expr[expr] */
             AstNode *idx = parse_expr();
@@ -2117,9 +2264,20 @@ static AstNode *parse_primary(void) {
         }
 
         case TOK_LPAREN: {
-            /* Grouped expression */
+            /* Grouped expression or tuple literal: (expr) or (expr, expr, ...) */
             adv();
             AstNode *expr = parse_expr();
+            if (match(TOK_COMMA)) {
+                /* Tuple literal: (expr, expr, ...) */
+                AstNode *tuple = ast_new_tuple_lit(expr->loc);
+                nodelist_push(&tuple->as.tuple_lit.elements, expr);
+                nodelist_push(&tuple->as.tuple_lit.elements, parse_expr());
+                while (match(TOK_COMMA)) {
+                    nodelist_push(&tuple->as.tuple_lit.elements, parse_expr());
+                }
+                expect(TOK_RPAREN);
+                return tuple;
+            }
             expect(TOK_RPAREN);
             return expr;
         }

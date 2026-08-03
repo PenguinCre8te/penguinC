@@ -1,0 +1,23 @@
+#import std.console;
+
+int main() {
+    (int, int) t = (10, 20);
+    console.println_int(t.0);
+    console.println_int(t.1);
+    t.0 = 99;
+    console.println_int(t.0);
+    (int, float) t2 = (42, 3.14);
+    console.println_int(t2.0);
+    string sf = t2.1.to<string>();
+    console.println(sf);
+    (int, int, int) t3 = (1, 2, 3);
+    console.println_int(t3.0);
+    console.println_int(t3.1);
+    console.println_int(t3.2);
+    (int, int) pair = (100, 200);
+    console.println_int(pair.0 + pair.1);
+    (int, int) nums = (5, 10);
+    int sum = nums.0 + nums.1;
+    console.println_int(sum);
+    return 0;
+}

@@ -10,11 +10,16 @@ typedef enum {
     TC_VOID,
     TC_STRING,
     TC_CHAR,
+    TC_I8, TC_I16, TC_I32, TC_I64, TC_I128,
+    TC_U8, TC_U16, TC_U32, TC_U64, TC_U128,
+    TC_ISIZE, TC_USIZE,
+    TC_F32, TC_F64,
     TC_STRUCT,
     TC_CLASS,
     TC_ENUM,
     TC_POINTER,
     TC_FUNCTION,
+    TC_TUPLE,
     TC_UNKNOWN,
     TC_TYPE_ERROR,
 } TCTypeKind;
@@ -28,6 +33,10 @@ typedef struct TCType {
         TCTypeKind ret_kind;
         size_t param_count;
     } fn;
+    struct {
+        struct TCType *elems;
+        size_t count;
+    } tuple;
 } TCType;
 
 typedef struct {

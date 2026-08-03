@@ -6,6 +6,6 @@ long main() {
     using(mutex.create() as m) {
         x = 42
     }
-    console.println(x.toS())
+    console.println(x.to<string>())
     "42"
 }

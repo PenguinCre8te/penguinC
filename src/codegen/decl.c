@@ -22,7 +22,8 @@ static void codegen_func_decl(CodegenCtx *cg, AstNode *node) {
     }
 
     LLVMTypeRef ret_ty = resolve_type(cg, ret_type_name);
-    if (LLVMGetTypeKind(ret_ty) == LLVMStructTypeKind)
+    /* Convert named struct returns to pointer (ABI convention), but NOT tuples */
+    if (LLVMGetTypeKind(ret_ty) == LLVMStructTypeKind && ret_type_name[0] != '(')
         ret_ty = LLVMPointerType(ret_ty, 0);
 
     int is_method = node->as.func_decl.is_method;

@@ -135,6 +135,8 @@ typedef enum {
     NODE_GENERIC_INST,   /* Generic type instantiation: Foo[T] */
     NODE_ARRAY_LIT,      /* Array literal: [1, 2, 3] */
     NODE_INDEX,          /* Array index: arr[i] */
+    NODE_TUPLE_LIT,      /* Tuple literal: (1, 2, 3) */
+    NODE_TUPLE_FIELD,    /* Tuple field access: t.0 */
 } NodeType;
 
 /* ------------------------------------------------------------------ */
@@ -342,6 +344,12 @@ struct AstNode {
 
         /* NODE_INDEX */
         struct { AstNode *object; AstNode *index; } index;
+
+        /* NODE_TUPLE_LIT */
+        struct { NodeList elements; } tuple_lit;
+
+        /* NODE_TUPLE_FIELD */
+        struct { AstNode *object; long index; } tuple_field;
     } as;
 };
 
@@ -406,5 +414,7 @@ AstNode *ast_new_decorator(SrcLoc loc, const char *name, AstNode *target);
 AstNode *ast_new_generic_inst(SrcLoc loc, const char *base_name);
 AstNode *ast_new_array_lit(SrcLoc loc);
 AstNode *ast_new_index(SrcLoc loc, AstNode *object, AstNode *index);
+AstNode *ast_new_tuple_lit(SrcLoc loc);
+AstNode *ast_new_tuple_field(SrcLoc loc, AstNode *object, long index);
 
 #endif /* PENGUINC_AST_H */

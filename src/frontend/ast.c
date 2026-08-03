@@ -452,3 +452,16 @@ AstNode *ast_new_index(SrcLoc loc, AstNode *object, AstNode *index) {
     n->as.index.index  = index;
     return n;
 }
+
+AstNode *ast_new_tuple_lit(SrcLoc loc) {
+    AstNode *n = ast_new(NODE_TUPLE_LIT, loc);
+    nodelist_init(&n->as.tuple_lit.elements);
+    return n;
+}
+
+AstNode *ast_new_tuple_field(SrcLoc loc, AstNode *object, long index) {
+    AstNode *n = ast_new(NODE_TUPLE_FIELD, loc);
+    n->as.tuple_field.object = object;
+    n->as.tuple_field.index  = index;
+    return n;
+}

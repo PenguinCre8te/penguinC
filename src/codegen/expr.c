@@ -1,6 +1,21 @@
 #include "codegen_internal.h"
 #include <stdio.h>
 
+static int is_integer_type_name(const char *name) {
+    return strcmp(name, "int") == 0 || strcmp(name, "long") == 0 ||
+           strcmp(name, "i8") == 0 || strcmp(name, "i16") == 0 ||
+           strcmp(name, "i32") == 0 || strcmp(name, "i64") == 0 ||
+           strcmp(name, "i128") == 0 || strcmp(name, "u8") == 0 ||
+           strcmp(name, "u16") == 0 || strcmp(name, "u32") == 0 ||
+           strcmp(name, "u64") == 0 || strcmp(name, "u128") == 0 ||
+           strcmp(name, "isize") == 0 || strcmp(name, "usize") == 0 ||
+           strcmp(name, "char") == 0;
+}
+
+static int is_float_type_name(const char *name) {
+    return strcmp(name, "float") == 0 || strcmp(name, "f32") == 0 || strcmp(name, "f64") == 0;
+}
+
 static const char *llvm_type_name(LLVMTypeRef ty) {
     if (!ty) return "?";
     switch (LLVMGetTypeKind(ty)) {
@@ -313,10 +328,36 @@ static LLVMValueRef get_lvalue(CodegenCtx *cg, AstNode *node) {
         return LLVMBuildGEP2(cg->builder, elem_ty, obj,
             (LLVMValueRef[]){idx}, 1, "idx.ptr");
     }
+    if (node->type == NODE_TUPLE_FIELD) {
+        LLVMValueRef obj = codegen_expr(cg, node->as.tuple_field.object);
+        if (!obj) return NULL;
+        /* For tuple field lvalue, extract-then-insert approach is needed;
+         * we return the extractvalue result; assignment handled specially */
+        return LLVMBuildExtractValue(cg->builder, obj,
+            (unsigned)node->as.tuple_field.index, "tuplefield");
+    }
     return codegen_expr(cg, node);
 }
 
 static LLVMValueRef codegen_assign(CodegenCtx *cg, AstNode *node) {
+    /* Handle tuple field assignment: t.0 = value */
+    if (node->as.assign.target->type == NODE_TUPLE_FIELD) {
+        AstNode *target = node->as.assign.target;
+        const char *var_name = target->as.tuple_field.object->as.ident.name;
+        long field_idx = target->as.tuple_field.index;
+        LLVMValueRef var_ptr = var_lookup(cg, var_name);
+        if (!var_ptr) {
+            error_at(node->loc, ERR_SEMANTIC,
+                "tuple assignment: undefined variable '%s'", var_name);
+            return NULL;
+        }
+        LLVMTypeRef var_ty = var_lookup_type(cg, var_name);
+        LLVMValueRef old_tuple = LLVMBuildLoad2(cg->builder, var_ty, var_ptr, "old.tuple");
+        LLVMValueRef new_val = codegen_expr(cg, node->as.assign.value);
+        LLVMValueRef new_tuple = LLVMBuildInsertValue(cg->builder, old_tuple, new_val, (unsigned)field_idx, "new.tuple");
+        LLVMBuildStore(cg->builder, new_tuple, var_ptr);
+        return new_val;
+    }
     LLVMValueRef target = get_lvalue(cg, node->as.assign.target);
     LLVMValueRef value  = codegen_expr(cg, node->as.assign.value);
     if (!target || !value) return NULL;
@@ -365,11 +406,12 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
         return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0));
 
     if (node->as.call.callee->type == NODE_MEMBER &&
-        node->as.call.args.count == 0) {
+        node->as.call.args.count == 1 &&
+        node->as.call.args.items[0]->type == NODE_GENERIC_INST) {
         AstNode *obj = node->as.call.callee->as.member.object;
         const char *method = node->as.call.callee->as.member.member;
-        if (strcmp(method, "toI") == 0 || strcmp(method, "toF") == 0 ||
-            strcmp(method, "toS") == 0 || strcmp(method, "toB") == 0) {
+        if (strcmp(method, "to") == 0) {
+            const char *target = node->as.call.args.items[0]->as.generic_inst.base_name;
 
             const char *src_type = NULL;
             if (obj->type == NODE_IDENTIFIER)
@@ -428,7 +470,7 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                 }
                 if (is_class && resolved_name) {
                     char method_mangled[512];
-                    snprintf(method_mangled, sizeof(method_mangled), "%s.%s", resolved_name, method);
+                    snprintf(method_mangled, sizeof(method_mangled), "%s.to", resolved_name);
                     LLVMValueRef callee_fn = LLVMGetNamedFunction(cg->module, method_mangled);
                     if (callee_fn) {
                         LLVMTypeRef callee_ft = fn_type_lookup(cg, method_mangled);
@@ -448,30 +490,13 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
             if (!val) return NULL;
 
             LLVMTypeRef val_ty = LLVMTypeOf(val);
+            LLVMTypeRef target_ty = resolve_type(cg, target);
             LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);
             LLVMTypeRef f64_ty = LLVMDoubleTypeInContext(cg->ctx);
             LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
 
-            if (strcmp(method, "toI") == 0) {
-                if (src_type && strcmp(src_type, "int") == 0) return val;
-                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
-                    return LLVMBuildSExtOrBitCast(cg->builder, val, i64_ty, "toi");
-                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind)
-                    return LLVMBuildFPToSI(cg->builder, val, i64_ty, "toi");
-                LLVMTypeRef fn_ty = LLVMFunctionType(i64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
-                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_int", fn_ty);
-                return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "toi");
-            }
-            if (strcmp(method, "toF") == 0) {
-                if (src_type && strcmp(src_type, "float") == 0) return val;
-                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind) return val;
-                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
-                    return LLVMBuildSIToFP(cg->builder, val, f64_ty, "tof");
-                LLVMTypeRef fn_ty = LLVMFunctionType(f64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
-                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_float", fn_ty);
-                return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tof");
-            }
-            if (strcmp(method, "toS") == 0) {
+            /* string target */
+            if (strcmp(target, "string") == 0) {
                 if (src_type && strcmp(src_type, "string") == 0) return val;
                 if (LLVMGetTypeKind(val_ty) == LLVMPointerTypeKind) return val;
                 if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
@@ -481,27 +506,83 @@ static LLVMValueRef codegen_call(CodegenCtx *cg, AstNode *node) {
                         LLVMValueRef ext = LLVMBuildZExt(cg->builder, val, i64_ty, "bext");
                         return LLVMBuildCall2(cg->builder, fn_ty, fn, &ext, 1, "tos");
                     }
+                    /* Widen integer to i64 for int_to_string */
+                    LLVMValueRef wide = LLVMBuildSExtOrBitCast(cg->builder, val, i64_ty, "widened");
                     LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64_ty}, 1, 0);
                     LLVMValueRef fn = get_or_declare_runtime_fn(cg, "int_to_string", fn_ty);
-                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tos");
+                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &wide, 1, "tos");
                 }
-                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind) {
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind ||
+                    LLVMGetTypeKind(val_ty) == LLVMFloatTypeKind) {
+                    LLVMValueRef wide = LLVMBuildFPExt(cg->builder, val, f64_ty, "widened");
                     LLVMTypeRef fn_ty = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){f64_ty}, 1, 0);
                     LLVMValueRef fn = get_or_declare_runtime_fn(cg, "float_to_string", fn_ty);
-                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tos");
+                    return LLVMBuildCall2(cg->builder, fn_ty, fn, &wide, 1, "tos");
                 }
                 return val;
             }
-            if (strcmp(method, "toB") == 0) {
+
+            /* bool target */
+            if (strcmp(target, "bool") == 0) {
                 if (src_type && strcmp(src_type, "bool") == 0) return val;
                 if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(val_ty) == 1)
                     return val;
                 if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind)
                     return LLVMBuildICmp(cg->builder, LLVMIntNE, val, LLVMConstInt(val_ty, 0, 0), "tob");
-                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind)
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind || LLVMGetTypeKind(val_ty) == LLVMFloatTypeKind)
                     return LLVMBuildFCmp(cg->builder, LLVMRealUNE, val, LLVMConstReal(f64_ty, 0.0), "tob");
                 return LLVMConstInt(LLVMInt1TypeInContext(cg->ctx), 1, 0);
             }
+
+            /* int target family */
+            if (is_integer_type_name(target)) {
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
+                    unsigned src_w = LLVMGetIntTypeWidth(val_ty);
+                    unsigned dst_w = LLVMGetIntTypeWidth(target_ty);
+                    if (src_w == dst_w) return val;
+                    if (src_w < dst_w) return LLVMBuildSExtOrBitCast(cg->builder, val, target_ty, "toi");
+                    return LLVMBuildTrunc(cg->builder, val, target_ty, "toi");
+                }
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind || LLVMGetTypeKind(val_ty) == LLVMFloatTypeKind)
+                    return LLVMBuildFPToSI(cg->builder, val, target_ty, "toi");
+                LLVMTypeRef fn_ty = LLVMFunctionType(i64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
+                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_int", fn_ty);
+                LLVMValueRef parsed = LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "toi");
+                return LLVMBuildTruncOrBitCast(cg->builder, parsed, target_ty, "toi");
+            }
+
+            /* float target family */
+            if (is_float_type_name(target)) {
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind && strcmp(target, "f64") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMFloatTypeKind && strcmp(target, "f32") == 0) return val;
+                if (LLVMGetTypeKind(val_ty) == LLVMDoubleTypeKind && strcmp(target, "f32") == 0)
+                    return LLVMBuildFPTrunc(cg->builder, val, LLVMFloatTypeInContext(cg->ctx), "tof");
+                if (LLVMGetTypeKind(val_ty) == LLVMFloatTypeKind && strcmp(target, "f64") == 0)
+                    return LLVMBuildFPExt(cg->builder, val, f64_ty, "tof");
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
+                    if (strcmp(target, "f32") == 0)
+                        return LLVMBuildSIToFP(cg->builder, val, LLVMFloatTypeInContext(cg->ctx), "tof");
+                    return LLVMBuildSIToFP(cg->builder, val, f64_ty, "tof");
+                }
+                LLVMTypeRef fn_ty = LLVMFunctionType(f64_ty, (LLVMTypeRef[]){i8ptr}, 1, 0);
+                LLVMValueRef fn = get_or_declare_runtime_fn(cg, "parse_float", fn_ty);
+                LLVMValueRef parsed = LLVMBuildCall2(cg->builder, fn_ty, fn, &val, 1, "tof");
+                if (strcmp(target, "f32") == 0)
+                    return LLVMBuildFPTrunc(cg->builder, parsed, LLVMFloatTypeInContext(cg->ctx), "tof");
+                return parsed;
+            }
+
+            /* char target */
+            if (strcmp(target, "char") == 0) {
+                if (LLVMGetTypeKind(val_ty) == LLVMIntegerTypeKind) {
+                    if (LLVMGetIntTypeWidth(val_ty) == 8) return val;
+                    return LLVMBuildTrunc(cg->builder, val, LLVMInt8TypeInContext(cg->ctx), "toch");
+                }
+                return val;
+            }
+
+            /* Fallback: bitcast */
+            return LLVMBuildBitCast(cg->builder, val, target_ty, "tobit");
         }
     }
 
@@ -1642,6 +1723,30 @@ static LLVMValueRef codegen_index(CodegenCtx *cg, AstNode *node) {
     return LLVMBuildLoad2(cg->builder, elem_ty, ptr, "idx.val");
 }
 
+static LLVMValueRef codegen_tuple_lit(CodegenCtx *cg, AstNode *node) {
+    size_t count = node->as.tuple_lit.elements.count;
+    LLVMTypeRef *elem_types = malloc(count * sizeof(LLVMTypeRef));
+    LLVMValueRef *elem_vals = malloc(count * sizeof(LLVMValueRef));
+    for (size_t i = 0; i < count; i++) {
+        elem_vals[i] = codegen_expr(cg, node->as.tuple_lit.elements.items[i]);
+        elem_types[i] = LLVMTypeOf(elem_vals[i]);
+    }
+    LLVMTypeRef tuple_type = LLVMStructTypeInContext(cg->ctx, elem_types, count, 1);
+    LLVMValueRef tuple = LLVMGetUndef(tuple_type);
+    for (size_t i = 0; i < count; i++) {
+        tuple = LLVMBuildInsertValue(cg->builder, tuple, elem_vals[i], i, "tupleinsert");
+    }
+    free(elem_types);
+    free(elem_vals);
+    return tuple;
+}
+
+static LLVMValueRef codegen_tuple_field(CodegenCtx *cg, AstNode *node) {
+    LLVMValueRef obj = codegen_expr(cg, node->as.tuple_field.object);
+    long idx = node->as.tuple_field.index;
+    return LLVMBuildExtractValue(cg->builder, obj, (unsigned)idx, "tuplefield");
+}
+
 LLVMValueRef codegen_expr(CodegenCtx *cg, AstNode *node) {
     if (!node) return NULL;
     switch (node->type) {
@@ -1669,6 +1774,8 @@ LLVMValueRef codegen_expr(CodegenCtx *cg, AstNode *node) {
         case NODE_FSTRING_PART: return codegen_fstring_part(cg, node);
         case NODE_ARRAY_LIT:    return codegen_array_lit(cg, node);
         case NODE_INDEX:        return codegen_index(cg, node);
+        case NODE_TUPLE_LIT:    return codegen_tuple_lit(cg, node);
+        case NODE_TUPLE_FIELD:  return codegen_tuple_field(cg, node);
         case NODE_STMT_EXPR:    return codegen_expr(cg, node->as.stmt_expr.expr);
         default:
             error_at(node->loc, ERR_SEMANTIC,
