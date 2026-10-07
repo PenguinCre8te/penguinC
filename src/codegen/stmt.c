@@ -709,6 +709,33 @@ static void codegen_match(CodegenCtx *cg, AstNode *node) {
     LLVMPositionBuilderAtEnd(cg->builder, merge_bb);
 }
 
+/* Resolve a simple class name (e.g., "Mutex") to its qualified name (e.g., "std.mutex.Mutex")
+ * by searching the func_map for a matching entry. */
+static const char *resolve_class_name(CodegenCtx *cg, const char *simple_name) {
+    size_t nlen = strlen(simple_name);
+    for (size_t i = 0; i < cg->func_map_count; i++) {
+        const char *key = cg->func_maps[i].pc_name;
+        size_t klen = strlen(key);
+        /* Look for pattern: "*.ClassName.*" where ClassName matches simple_name */
+        if (klen > nlen + 2) {
+            const char *dot = key;
+            while ((dot = strchr(dot, '.')) != NULL) {
+                dot++;
+                if (strncasecmp(dot, simple_name, nlen) == 0 &&
+                    (dot[nlen] == '.' || dot[nlen] == '\0')) {
+                    /* Found: extract "module.ClassName" prefix */
+                    size_t prefix_len = dot + nlen - key;
+                    char *result = malloc(prefix_len + 1);
+                    memcpy(result, key, prefix_len);
+                    result[prefix_len] = '\0';
+                    return result;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 static void codegen_using(CodegenCtx *cg, AstNode *node) {
     LLVMValueRef resource = codegen_expr(cg, node->as.using_stmt.resource);
     if (!resource) {
@@ -748,6 +775,13 @@ static void codegen_using(CodegenCtx *cg, AstNode *node) {
                 }
             }
         }
+    }
+
+    /* If type_name is a simple class name (no dot), resolve to qualified name */
+    if (type_name && !strchr(type_name, '.')) {
+        const char *resolved = resolve_class_name(cg, type_name);
+        if (resolved)
+            type_name = resolved;
     }
 
     LLVMTypeRef i64_ty = LLVMInt64TypeInContext(cg->ctx);

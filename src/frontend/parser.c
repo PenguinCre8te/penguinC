@@ -1226,16 +1226,19 @@ static AstNode *parse_header_file(const char *filepath) {
                             char *close_paren = strchr(args_str, ')');
                             if (close_paren) *close_paren = '\0';
 
-                            /* All class methods require 'self' as first param */
+                            /* All class methods have implicit 'self' (long) parameter.
+                             * .ph files may or may not explicitly write 'self'. */
+                            const char *param_types[32];
+                            size_t param_count = 0;
                             {
                                 char *first_arg = trim(args_str);
                                 size_t first_len = 0;
                                 while (first_arg[first_len] && first_arg[first_len] != ',' &&
                                        first_arg[first_len] != ' ' && first_arg[first_len] != '\t')
                                     first_len++;
-                                if (first_len != 4 || strncmp(first_arg, "self", 4) != 0) {
-                                    /* error in .ph: class method requires self as first parameter */
-                                } else {
+                                int has_explicit_self = (first_len == 4 &&
+                                    strncmp(first_arg, "self", 4) == 0);
+                                if (has_explicit_self) {
                                     /* skip 'self' param in mangled name generation */
                                     char *after_self = strchr(first_arg, ',');
                                     if (after_self) {
@@ -1244,6 +1247,8 @@ static AstNode *parse_header_file(const char *filepath) {
                                         args_str = first_arg + first_len;
                                     }
                                 }
+                                /* Always add implicit self (long) param for class methods */
+                                param_types[param_count++] = "long";
                             }
 
                             /* Extract return type - try '->' after paren, else before method name */
@@ -1279,9 +1284,8 @@ static AstNode *parse_header_file(const char *filepath) {
                             char mangled[512];
                             size_t mpos = 0;
                             mpos += snprintf(mangled + mpos, sizeof(mangled) - mpos, "_pC%s", method_name);
-
-                            const char *param_types[32];
-                            size_t param_count = 0;
+                            /* Add implicit self (long) mangled as '2' for class methods */
+                            mangled[mpos++] = '2';
 
                             char *arg = trim(args_str);
                             while (*arg) {

@@ -35,9 +35,9 @@ static void print_usage(void) {
         "  -o <file>      Set output file (default: derive from input)\n"
         "  -c             Compile only, do not link\n"
         "  -g             Generate debug symbols (DWARF)\n"
-        "  -O0            No optimizations (default)\n"
+        "  -O0            No optimizations\n"
         "  -O1            Basic optimizations\n"
-        "  -O2            Default optimizations\n"
+        "  -O2            Default optimizations (Default)\n"
         "  -O3            Aggressive optimizations\n"
         "  --for-test     Clean error output for testing (no colors, no source context)\n"
         "  --version      Print version\n"
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     int compile_only = 0;
     int for_test = 0;
     int debug_enabled = 0;
-    OptLevel opt = OPT_NONE;
+    OptLevel opt = OPT_DEFAULT;
     LinkPaths links = {0};
 
     for (int i = 1; i < argc; i++) {

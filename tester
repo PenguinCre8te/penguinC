@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Path to your executable
+EXECUTABLE="./test"
+
+# Check if the executable exists and is executable
+if [ ! -x "$EXECUTABLE" ]; then
+    echo "Error: Executable not found or not executable at '$EXECUTABLE'" >&2
+    echo "Please update the EXECUTABLE variable in the script." >&2
+    exit 1
+fi
+
+echo "Running '$EXECUTABLE' 500 times..."
+
+# Create a temporary file to store all outputs
+TEMP_FILE=$(mktemp)
+
+# Run the executable 100 times in a loop
+for ((i=1; i<=500; i++)); do
+    # Capture both stdout and stderr (remove '2>&1' if you only want stdout)
+    "$EXECUTABLE" >> "$TEMP_FILE" 2>&1
+    
+    # Optional: If each execution outputs multiple lines and you want to treat 
+    # each entire execution as a single result block, you would need a different 
+    # approach. This script assumes one result per execution (or per line).
+    # If your program outputs a single line per run, add a newline separator:
+    echo "---RUN-DELIMITER---" >> "$TEMP_FILE"
+done
+
+echo ""
+echo "=== Results Summary (Sorted by Frequency) ==="
+echo "Count | Result"
+echo "--------------------------------------------------"
+
+# Process the output:
+# If your executable outputs a single line per run, use this sorting method:
+# (Note: This groups by exact line output)
+sort "$TEMP_FILE" | uniq -c | sort -nr
+
+# Clean up the temporary file
+rm "$TEMP_FILE"

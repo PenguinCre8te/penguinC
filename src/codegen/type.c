@@ -91,6 +91,11 @@ LLVMTypeRef resolve_type(CodegenCtx *cg, const char *name) {
     if (strchr(name, '.')) {
         return LLVMInt64TypeInContext(cg->ctx);
     }
+    /* Class handles are i64 — check case-insensitively */
+    for (size_t i = 0; i < cg->class_count; i++) {
+        if (strcasecmp(cg->classes[i].name, name) == 0)
+            return LLVMInt64TypeInContext(cg->ctx);
+    }
     LLVMTypeRef st = struct_lookup(cg, name);
     if (st) return st;
     return LLVMPointerType(LLVMInt8TypeInContext(cg->ctx), 0);
